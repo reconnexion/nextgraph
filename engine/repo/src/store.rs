@@ -144,7 +144,7 @@ impl Store {
     }
 
     /// Save a block to the storage.
-    pub fn put(&self, block: &Block) -> Result<BlockId, StorageError> {
+    pub fn put(&self, block: &Block) -> Result<(BlockId, usize), StorageError> {
         self.storage
             .write()
             .map_err(|_| StorageError::BackendError)?

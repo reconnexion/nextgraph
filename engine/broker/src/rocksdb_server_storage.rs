@@ -608,7 +608,7 @@ impl RocksDbServerStorage {
         &self,
         overlay: &OverlayId,
         block: Block,
-    ) -> Result<BlockId, ServerError> {
+    ) -> Result<(BlockId, usize), ServerError> {
         if overlay.is_outer() {
             // we don't publish events on the outer overlay!
             return Err(ServerError::OverlayMismatch);
@@ -620,27 +620,29 @@ impl RocksDbServerStorage {
         Ok(self.add_block_(overlay, &mut overlay_storage, block)?)
     }
 
+    // Called by both save_event (below) and ServerBroker::put_block
     fn add_block_(
         &self,
         overlay_id: &OverlayId,
         overlay_storage: &mut OverlayStorage,
         block: Block,
-    ) -> Result<BlockId, StorageError> {
-        let block_id = self
+    ) -> Result<(BlockId, usize), StorageError> {
+        let res @ (block_id, _sz) = self
             .block_storage
             .write()
             .unwrap()
             .put(overlay_id, &block, true)?;
         OverlayStorage::BLOCKS.increment(overlay_storage, &block_id)?;
-        Ok(block_id)
+        Ok(res)
     }
 
+    // Returns the topic-id as well as the total written size
     pub(crate) fn save_event(
         &self,
         overlay: &OverlayId,
         event: Event,
         user_id: &UserId,
-    ) -> Result<TopicId, ServerError> {
+    ) -> Result<(TopicId, usize), ServerError> {
         if overlay.is_outer() {
             // we don't publish events on the outer overlay!
             return Err(ServerError::OverlayMismatch);
@@ -666,6 +668,7 @@ impl RocksDbServerStorage {
         if !is_publisher {
             return Err(ServerError::AccessDenied);
         }
+        let mut storage_size = 0usize;
         //log_info!("SAVED EVENT in overlay {:?} : {}", overlay, event);
         // remove the blocks from inside the event, and save the "dehydrated" event and each block separately.
         match event {
@@ -676,11 +679,13 @@ impl RocksDbServerStorage {
                 let temp_mini_block_storage = HashMapBlockStorage::new();
                 for block in v0.content.blocks {
                     let _ = temp_mini_block_storage.put(overlay, &block, false)?;
-                    extracted_blocks_ids.push(self.add_block_(
+                    let (block_id, sz) = self.add_block_(
                         overlay,
                         &mut overlay_storage,
                         block,
-                    )?);
+                    )?;
+                    extracted_blocks_ids.push(block_id);
+                    storage_size += sz;
                 }
 
                 // creating a temporary store to access the blocks
@@ -722,7 +727,7 @@ impl RocksDbServerStorage {
             }
         }
 
-        Ok(topic)
+        Ok((topic, storage_size))
     }
 
     pub(crate) fn topic_sync_req(
@@ -778,5 +783,21 @@ impl RocksDbServerStorage {
         }
 
         Ok(result)
+    }
+
+    pub(crate) fn usage_stats(&self, user_id: &UserId) -> Result<UsageStats, ProtocolError> {
+        let acc = Account::open(&user_id, &self.accounts_storage)?;
+        let stats = acc.usage_stats()?;
+        Ok(stats)
+    }
+
+    pub(crate) fn usage_stats_update_for_user(
+        &self,
+        user_id: &UserId,
+        net_stats: &NetStats,
+        storage_bytes: u64,
+    ) -> Result<(), StorageError> {
+        let acc = Account::open(&user_id, &self.accounts_storage)?;
+        acc.usage_stats_update(net_stats, storage_bytes)
     }
 }

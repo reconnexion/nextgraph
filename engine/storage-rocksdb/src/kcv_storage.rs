@@ -159,6 +159,16 @@ impl<'a> ReadTransaction for RocksdbTransaction<'a> {
             Err(StorageError::DifferentValue)
         }
     }
+
+    fn has_property(
+        &self,
+        prefix: u8,
+        key: &Vec<u8>,
+        suffix: Option<u8>,
+        family: &Option<String>,
+    ) -> bool {
+        self.get(prefix, key, suffix, family).is_ok()
+    }
 }
 
 impl<'a> WriteTransaction for RocksdbTransaction<'a> {
@@ -456,6 +466,16 @@ impl ReadTransaction for RocksDbKCVStorage {
             Err(StorageError::DifferentValue)
         }
     }
+
+    fn has_property(
+        &self,
+        prefix: u8,
+        key: &Vec<u8>,
+        suffix: Option<u8>,
+        family: &Option<String>,
+    ) -> bool {
+        self.get(prefix, key, suffix, family).is_ok()
+    }
 }
 
 impl KCVStorage for RocksDbKCVStorage {
@@ -475,6 +495,23 @@ impl KCVStorage for RocksDbKCVStorage {
             //lock.sync(true);
         }
         res
+    }
+
+    /// Returns a quick estimate of current storage size
+    fn storage_size(&self) -> Result<u64, StorageError> {
+        const PROPERTY: &str = "rocksdb.live-sst-files-size";
+        match self.db.property_int_value(PROPERTY) {
+            Ok(Some(v)) =>
+                Ok(v),
+            Ok(None) => {
+                log_warn!("No such rocksdb property: {}", PROPERTY);
+                Err(StorageError::BackendError)
+            },
+            Err(e) => {
+                log_warn!("Cannot read rocksdb property {}: {}", PROPERTY, e);
+                Err(StorageError::BackendError)
+            }
+        }
     }
 }
 

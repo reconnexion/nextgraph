@@ -31,8 +31,8 @@ pub trait BlockStorage: Send + Sync {
     //     todo!();
     // }
 
-    /// Save a block to the storage.
-    fn put(&self, overlay: &OverlayId, block: &Block, lazy: bool) -> Result<BlockId, StorageError>;
+    /// Save a block to the storage, return its Id and the written size.
+    fn put(&self, overlay: &OverlayId, block: &Block, lazy: bool) -> Result<(BlockId, usize), StorageError>;
 
     /// Delete a block from the storage.
     fn del(&self, overlay: &OverlayId, id: &BlockId) -> Result<usize, StorageError>;
@@ -121,7 +121,7 @@ impl HashMapBlockStorage {
     }
     pub fn put_local(&self, block: &Block) -> Result<BlockId, StorageError> {
         let overlay = OverlayId::nil();
-        self.put(&overlay, block, false)
+        self.put(&overlay, block, false).map(|(id, _)| id)
     }
 }
 
@@ -157,13 +157,13 @@ impl BlockStorage for HashMapBlockStorage {
         _overlay: &OverlayId,
         block: &Block,
         _lazy: bool,
-    ) -> Result<BlockId, StorageError> {
+    ) -> Result<(BlockId, usize), StorageError> {
         let id = block.id();
         //log_debug!("PUTTING {}", id);
         let mut b = block.clone();
         b.set_key(None);
         self.blocks.write().unwrap().insert(id, b);
-        Ok(id)
+        Ok((id, 0usize))
     }
 
     fn del(&self, _overlay: &OverlayId, id: &BlockId) -> Result<usize, StorageError> {

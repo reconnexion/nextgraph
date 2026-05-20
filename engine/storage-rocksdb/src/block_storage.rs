@@ -128,8 +128,8 @@ impl BlockStorage for RocksDbBlockStorage {
         Ok(())
     }
 
-    /// Save a block to the storage.
-    fn put(&self, overlay: &OverlayId, block: &Block, lazy: bool) -> Result<BlockId, StorageError> {
+    /// Save a block to the storage. Returns the written size (0 for dups if `lazy`)
+    fn put(&self, overlay: &OverlayId, block: &Block, lazy: bool) -> Result<(BlockId, usize), StorageError> {
         // TODO? return an error if already present in blockstorage and !lazy ?
         let block_id = block.id();
         let ser = serde_bare::to_vec(block)?;
@@ -141,12 +141,12 @@ impl BlockStorage for RocksDbBlockStorage {
                 .map_err(|_e| StorageError::BackendError)?
             {
                 let block: Block = serde_bare::from_slice(&block_ser)?;
-                return Ok(block.id());
+                return Ok((block.id(), 0usize));
             }
         }
         tx.put(key, &ser).map_err(|_e| StorageError::BackendError)?;
         tx.commit().map_err(|_| StorageError::BackendError)?;
-        Ok(block_id)
+        Ok((block_id, ser.len()))
     }
 
     /// Delete a block from the storage.

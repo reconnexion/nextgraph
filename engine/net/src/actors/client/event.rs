@@ -101,14 +101,18 @@ impl EActor for Actor<'_, PublishEvent, ()> {
                     .send_in_reply_to(res.into(), self.id())
                     .await?;
             } else {
+                let (peer_ids, storage_size) = res.unwrap();
                 let broker = { BROKER.read().await.get_server_broker()? };
-                for client in res.unwrap() {
+                for client in peer_ids {
                     broker
                         .read()
                         .await
                         .remove_all_subscriptions_of_client(&client)
                         .await;
                 }
+                //log_debug!("events: adding {} bytes of storage", storage_bytes);
+                broker.read().await
+                    .usage_stats_storage_bytes_add(&user_id, storage_size).await;
                 let finalres: Result<(), ServerError> = Ok(());
                 _fsm.lock()
                     .await

@@ -635,11 +635,13 @@ impl Broker {
         mut connection: ConnectionBase,
         remote_bind_address: BindAddress,
         local_bind_address: BindAddress,
+        net_stats: Arc<std::sync::Mutex<NetStats>>,
     ) -> Result<(), NetError> {
         if self.closing {
             return Err(NetError::Closing);
         }
 
+        let fsm = connection.fsm.as_ref().map(Arc::clone);
         let join: mpsc::UnboundedReceiver<Either<NetError, X25519PrivKey>> =
             connection.take_shutdown();
         if self
@@ -658,6 +660,9 @@ impl Broker {
             mut join: Receiver<Either<NetError, X25519PrivKey>>,
             remote_bind_address: BindAddress,
             local_bind_address: BindAddress,
+            fsm: Option<Arc<Mutex<NoiseFSM>>>,
+            // The critical section is tiny so sync Mutex is ok.
+            net_stats: Arc<std::sync::Mutex<NetStats>>,
         ) -> ResultSend<()> {
             async move {
                 let res = join.next().await;
@@ -690,12 +695,44 @@ impl Broker {
                             .remove_anonymous(remote_bind_address, local_bind_address);
                     }
                 }
+                if let Some(fsm) = fsm {
+                    let fsm = fsm.lock().await;
+                    match fsm.user_id() {
+                        Ok(user_id) => match BROKER.write().await.get_server_broker() {
+                            Err(e) => log_err!(
+                                "Cannot get the server broker, won't \
+                                              save net stats: {}",
+                                e
+                            ),
+                            Ok(sb) => {
+                                let sb = sb.read().await;
+                                let net_stats = net_stats.lock().unwrap().clone();
+                                if let Err(e) = sb.usage_stats_update_for_user(&user_id, &net_stats).await {
+                                    log_err!(
+                                            "Cannot update usage stats for {}: {:?}",
+                                            &user_id, e
+                                    )
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            log_warn!("No user_id to account net usage to (instead: {})", e);
+                        }
+                    }
+                } else {
+                    log_warn!("NET STATS: No FSM");
+                }
             }
             .await;
             Ok(())
         }
-        spawn_and_log_error(watch_close(join, remote_bind_address, local_bind_address));
-
+        spawn_and_log_error(watch_close(
+            join,
+            remote_bind_address,
+            local_bind_address,
+            fsm,
+            net_stats,
+        ));
         Ok(())
     }
 
@@ -879,6 +916,7 @@ impl Broker {
         cnx.probe(ip, port).await
     }
 
+    // Send an admin command to remote_peer_id
     pub async fn admin<
         A: Into<ProtocolMessage>
             + Into<AdminRequestContentV0>
@@ -889,9 +927,9 @@ impl Broker {
     >(
         &mut self,
         cnx: Box<dyn IConnect>,
-        peer_privk: PrivKey,
-        peer_pubk: PubKey,
-        remote_peer_id: DirectPeerId,
+        peer_privk: PrivKey,          // This broker's privk
+        peer_pubk: PubKey,            // This broker's pubk
+        remote_peer_id: DirectPeerId, // Remote broker's pubk
         user: PubKey,
         user_priv: PrivKey,
         addr: BindAddress,
@@ -1176,12 +1214,13 @@ impl Broker {
         event: Event,
         user_id: &UserId,
         remote_peer: &PubKey,
-    ) -> Result<Vec<ClientPeerId>, ServerError> {
+    ) -> Result<(Vec<ClientPeerId>, usize), ServerError> {
         // TODO: deal with subscriptions on the outer overlay. for now we assume everything is on the inner overlay
 
         let mut clients_to_remove = vec![];
 
-        let peers_for_local_dispatch = {
+
+        let (peers_for_local_dispatch, storage_size) = {
             self.get_server_broker()?
                 .read()
                 .await
@@ -1210,7 +1249,7 @@ impl Broker {
             }
         }
 
-        Ok(clients_to_remove)
+        Ok((clients_to_remove, storage_size))
     }
 
     #[cfg(not(target_arch = "wasm32"))]

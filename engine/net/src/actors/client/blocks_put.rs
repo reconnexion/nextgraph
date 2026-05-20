@@ -60,22 +60,27 @@ impl EActor for Actor<'_, BlocksPut, ()> {
         let sb = { BROKER.read().await.get_server_broker()? };
         let mut res: Result<(), ServerError> = Ok(());
         let overlay = req.overlay().clone();
+        let mut storage_bytes = 0usize;
         match req {
             BlocksPut::V0(v0) => {
                 for block in v0.blocks {
-                    let r = sb.read().await.put_block(&overlay, block);
-                    if r.is_err() {
-                        res = r;
-                        break;
+                    match sb.read().await.put_block(&overlay, block) {
+                        Ok(sz) => storage_bytes += sz,
+                        Err(e) => { res = Err(e); break }
                     }
                 }
             }
         }
-
-        fsm.lock()
-            .await
-            .send_in_reply_to(res.into(), self.id())
-            .await?;
+        //log_debug!("blocks_put: adding {} bytes of storage", storage_bytes);
+        let mut fsm = fsm.lock().await;
+        match fsm.user_id() {
+            Ok(user_id) =>
+                sb.read().await
+                    .usage_stats_storage_bytes_add(&user_id, storage_bytes).await,
+            Err(e) =>
+                log_warn!("No user_id to account storage usage to (instead: {})", e),
+        }
+        fsm.send_in_reply_to(res.into(), self.id()).await?;
         Ok(())
     }
 }

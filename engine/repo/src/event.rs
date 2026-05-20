@@ -308,7 +308,7 @@ impl EventV0 {
 
         let mut first_id = None;
         for block in &self.content.blocks {
-            let id = store.put(block)?;
+            let (id, _sz) = store.put(block)?;
             if first_id.is_none() {
                 first_id = Some(id)
             }

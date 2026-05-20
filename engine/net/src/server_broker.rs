@@ -49,7 +49,8 @@ pub trait IServerBroker: Send + Sync {
     async fn inbox_pop_for_user(&self, user: UserId) -> Result<InboxMsg, ServerError>;
     fn get_path_users(&self) -> PathBuf;
     fn get_block_storage(&self) -> Arc<std::sync::RwLock<dyn BlockStorage + Send + Sync>>;
-    fn put_block(&self, overlay_id: &OverlayId, block: Block) -> Result<(), ServerError>;
+    // Return the size written (0 for a duplicate block)
+    fn put_block(&self, overlay_id: &OverlayId, block: Block) -> Result<usize, ServerError>;
     fn has_block(&self, overlay_id: &OverlayId, block_id: &BlockId) -> Result<(), ServerError>;
     fn get_block(&self, overlay_id: &OverlayId, block_id: &BlockId) -> Result<Block, ServerError>;
     async fn create_user(&self, broker_id: &DirectPeerId) -> Result<UserId, ProtocolError>;
@@ -146,7 +147,7 @@ pub trait IServerBroker: Send + Sync {
         event: Event,
         user_id: &UserId,
         remote_peer: &PubKey,
-    ) -> Result<Vec<ClientPeerId>, ServerError>;
+    ) -> Result<(Vec<ClientPeerId>, usize), ServerError>;
 
     async fn remove_all_subscriptions_of_client(&self, client: &ClientPeerId);
 
@@ -158,4 +159,14 @@ pub trait IServerBroker: Send + Sync {
         target_heads: &Vec<ObjectId>,
         known_commits: &Option<BloomFilter>,
     ) -> Result<Vec<TopicSyncRes>, ServerError>;
+
+    async fn usage_stats_storage_bytes_add(&self, user_id: &UserId, bytes: usize);
+
+    fn usage_stats(&self, user_id: &UserId) -> Result<UsageStats, ProtocolError>;
+
+    async fn usage_stats_update_for_user(
+        &self,
+        user_id: &UserId,
+        net_stats: &NetStats,
+    ) -> Result<(), ServerError>;
 }

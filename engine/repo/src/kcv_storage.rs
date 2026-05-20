@@ -1076,6 +1076,15 @@ pub trait ReadTransaction {
         family: &Option<String>,
     ) -> Result<(), StorageError>;
 
+    /// Check if a property exists in the store.
+    fn has_property(
+        &self,
+        prefix: u8,
+        key: &Vec<u8>,
+        suffix: Option<u8>,
+        family: &Option<String>,
+    ) -> bool;
+
     /// retrieves all the keys and values with the given prefix and key_size. if no suffix is specified, then all (including none) the suffices are returned
     fn get_all_keys_and_values(
         &self,
@@ -1125,4 +1134,6 @@ pub trait KCVStorage: WriteTransaction {
     //     suffix: Option<u8>,
     //     value: Vec<u8>,
     // ) -> Result<(), StorageError>;
+
+    fn storage_size(&self) -> Result<u64, StorageError>;
 }

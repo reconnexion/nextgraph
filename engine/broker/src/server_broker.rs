@@ -153,6 +153,9 @@ pub struct ServerBrokerState {
     wallet_rendezvous: HashMap<SymKey, Sender<ExportedWallet>>,
     wallet_exports: HashMap<SymKey, ExportedWallet>,
     wallet_exports_timestamp: BTreeMap<SystemTime, SymKey>,
+
+    // Accumulated stats per user while they are connected:
+    usage_stats_storage_bytes: HashMap<UserId, u64>,
 }
 
 pub struct ServerBroker {
@@ -182,6 +185,7 @@ impl ServerBroker {
                 wallet_rendezvous: HashMap::new(),
                 wallet_exports: HashMap::new(),
                 wallet_exports_timestamp: BTreeMap::new(),
+                usage_stats_storage_bytes: HashMap::new(),
             }),
             master_key,
             path_users,
@@ -287,6 +291,13 @@ impl ServerBroker {
             lock.connect_local(peer_id_dh, *user_id)?;
         }
         Ok(verifier)
+    }
+
+    // Return the current write counter for that user and stop tracking it
+    pub async fn usage_stats_storage_flush(&self, user_id: &UserId) -> Option<u64> {
+        //log_debug!("usage_stats_storage_flush: flushing storage stats for {}", &user_id);
+        let mut lock = self.state.write().await;
+        lock.usage_stats_storage_bytes.remove(user_id)
     }
 }
 
@@ -410,9 +421,9 @@ impl IServerBroker for ServerBroker {
         self.storage.next_seq_for_peer(peer, seq)
     }
 
-    fn put_block(&self, overlay_id: &OverlayId, block: Block) -> Result<(), ServerError> {
-        self.storage.add_block(overlay_id, block)?;
-        Ok(())
+    fn put_block(&self, overlay_id: &OverlayId, block: Block) -> Result<usize, ServerError> {
+        let (_block_id, sz) = self.storage.add_block(overlay_id, block)?;
+        Ok(sz)
     }
     async fn create_user(&self, broker_id: &DirectPeerId) -> Result<UserId, ProtocolError> {
         let user_privkey = PrivKey::random_ed();
@@ -497,6 +508,10 @@ impl IServerBroker for ServerBroker {
     }
     fn remove_invitation(&self, invite_code: [u8; 32]) -> Result<(), ProtocolError> {
         self.storage.remove_invitation(invite_code)
+    }
+    fn usage_stats(&self, user: &UserId) -> Result<UsageStats, ProtocolError> {
+        // Call RocksDbServerStorage::usage_stats which will call Account::usage_stats:
+        self.storage.usage_stats(user)
     }
 
     async fn app_process_request(
@@ -870,8 +885,8 @@ impl IServerBroker for ServerBroker {
         event: Event,
         user_id: &UserId,
         remote_peer: &PubKey,
-    ) -> Result<Vec<ClientPeerId>, ServerError> {
-        let topic = self.storage.save_event(overlay, event, user_id)?;
+    ) -> Result<(Vec<ClientPeerId>, usize), ServerError> {
+        let (topic, storage_size) = self.storage.save_event(overlay, event, user_id)?;
 
         let lock = self.state.read().await;
         let mut map = lock
@@ -884,10 +899,11 @@ impl IServerBroker for ServerBroker {
 
         // log_info!("DISPATCH EVENT {} {} {:?}", overlay, topic, map);
 
-        Ok(map
+        let peer_ids = map
             .iter()
             .map(|(k, v)| ClientPeerId::new_from(k, v))
-            .collect())
+            .collect();
+        Ok((peer_ids, storage_size))
     }
 
     fn topic_sync_req(
@@ -900,5 +916,25 @@ impl IServerBroker for ServerBroker {
     ) -> Result<Vec<TopicSyncRes>, ServerError> {
         self.storage
             .topic_sync_req(overlay, topic, known_heads, target_heads, known_commits)
+    }
+
+    // Add this many bytes to the write counter of that user
+    async fn usage_stats_storage_bytes_add(&self, user_id: &UserId, bytes: usize) {
+        let mut lock = self.state.write().await;
+        let cur = lock.usage_stats_storage_bytes.entry(*user_id).or_insert(0u64);
+        *cur += bytes as u64
+    }
+
+    async fn usage_stats_update_for_user(
+        &self,
+        user_id: &UserId,
+        net_stats: &NetStats,
+    ) -> Result<(), ServerError> {
+        log_debug!("Updating stats for user {}", user_id);
+        let storage_bytes =
+            self.usage_stats_storage_flush(user_id).await.unwrap_or(0u64);
+        self.storage
+            .usage_stats_update_for_user(user_id, net_stats, storage_bytes)
+            .map_err(Into::into)
     }
 }
