@@ -18,7 +18,7 @@ use either::Either;
 use futures::{pin_mut, select, StreamExt};
 use futures::{FutureExt, SinkExt};
 use ng_async_tungstenite::{
-    async_std::{connect_async, ConnectStream},
+    async_std::connect_async,
     tungstenite::{protocol::frame::coding::CloseCode, protocol::CloseFrame, Message},
     WebSocketStream,
 };
@@ -184,7 +184,12 @@ impl Write for MeteredTcpStream {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl IAccept for ConnectionWebSocket {
-    type Socket = WebSocketStream<ConnectStream<MeteredTcpStream>>;
+    // The server accept path (accept_hdr_async) always yields a plain
+    // WebSocketStream<MeteredTcpStream>; it never goes through async-tungstenite's
+    // client TLS upgrade. Keeping this feature-independent (not ConnectStream<_>,
+    // which becomes Stream<_, TlsStream<_>> when async-native-tls is enabled)
+    // lets ngd and ngcli share a single feature-unified build without E0308.
+    type Socket = WebSocketStream<MeteredTcpStream>;
     async fn accept(
         &self,
         remote_bind_address: BindAddress,
@@ -220,7 +225,7 @@ impl IAccept for ConnectionWebSocket {
 }
 
 async fn close_ws<S: async_std::io::Read + async_std::io::Write + Unpin>(
-    stream: &mut WebSocketStream<ConnectStream<S>>,
+    stream: &mut WebSocketStream<S>,
     receiver: &mut Sender<ConnectionCommand>,
     code: u16,
     reason: &str,
@@ -250,21 +255,21 @@ async fn close_ws<S: async_std::io::Read + async_std::io::Write + Unpin>(
 }
 
 async fn ws_loop<S: async_std::io::Read + async_std::io::Write + Unpin>(
-    mut ws: WebSocketStream<ConnectStream<S>>,
+    mut ws: WebSocketStream<S>,
     sender: Receiver<ConnectionCommand>,
     mut receiver: Sender<ConnectionCommand>,
 ) -> Result<(), NetError>
 where
-    WebSocketStream<ConnectStream<S>>:
+    WebSocketStream<S>:
         futures::Stream<Item = Result<Message, ng_async_tungstenite::tungstenite::Error>>,
 {
     async fn inner_loop<S: async_std::io::Read + async_std::io::Write + Unpin>(
-        stream: &mut WebSocketStream<ConnectStream<S>>,
+        stream: &mut WebSocketStream<S>,
         mut sender: Receiver<ConnectionCommand>,
         receiver: &mut Sender<ConnectionCommand>,
     ) -> Result<ProtocolError, NetError>
     where
-        WebSocketStream<ConnectStream<S>>:
+        WebSocketStream<S>:
             futures::Stream<Item = Result<Message, ng_async_tungstenite::tungstenite::Error>>,
     {
         //let mut rx_sender = sender.fuse();
