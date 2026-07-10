@@ -157,7 +157,7 @@ async fn ws_loop(
                 let _ = ws.close_code(1000).await; //.map_err(|_e| NetError::WsError)?;
                 log_debug!("CLOSED GRACEFULLY");
             } else {
-                log_debug!("PROTOCOL ERR");
+                log_debug!("PROTOCOL ERR: {:?}", proto_err);
                 let mut code = proto_err.clone() as u16;
                 if code > 949 {
                     code = ProtocolError::OtherError as u16;

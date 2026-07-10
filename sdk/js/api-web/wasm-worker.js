@@ -97,7 +97,7 @@ onmessage = (e) => {
             }
         } else {
             // forwarding to ng
-            //console.log("processing...",method, args);
+            //console.log("processing...", method, args);
             try {
                 let res = await Reflect.apply(ng[method], null, args);
                 //console.log("got res=",res)

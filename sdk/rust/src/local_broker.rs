@@ -40,7 +40,7 @@ use ng_net::app_protocol::*;
 use ng_net::broker::*;
 use ng_net::connection::{AppConfig, ClientConfig, IConnect, NoiseFSM, StartConfig};
 use ng_net::types::*;
-use ng_net::utils::{spawn_and_log_error, Receiver, ResultSend, Sender};
+use ng_net::utils::{parse_ip_and_port_for, spawn_and_log_error, Receiver, ResultSend, Sender};
 use ng_net::{actor::*, actors::admin::*};
 
 use ng_verifier::orm::graph::types::{QueryScope, ShapeIri};
@@ -3143,11 +3143,59 @@ pub async fn take_disconnections_receiver() -> Result<Receiver<String>, NgError>
 async fn do_admin_call<
     A: Into<ProtocolMessage> + Into<AdminRequestContentV0> + std::fmt::Debug + Sync + Send + 'static,
 >(
-    server_peer_id: DirectPeerId,
-    admin_user_key: PrivKey,
-    bind_address: BindAddress,
+    session_id: u64,
     cmd: A,
-) -> Result<AdminResponseContentV0, ProtocolError> {
+) -> Result<AdminResponseContentV0, NgError> {
+    /* Get server_peer_id, admin_user_key (privkey) anfd bind_address from the
+     * session_id: */
+    let (server_peer_id, admin_user_key, bind_address) = {
+        let broker = match LOCAL_BROKER.get() {
+            Some(Err(e)) => {
+                log_err!("LocalBrokerNotInitialized: {}", e);
+                return Err(NgError::LocalBrokerNotInitialized)
+            },
+            None => {
+                log_err!("LocalBrokerNotInitialized");
+                return Err(NgError::LocalBrokerNotInitialized)
+            },
+            Some(Ok(b)) => b.read().await,
+        };
+        let user_id = broker.get_session(session_id)?.config.user_id();
+        let (wallet, session) = broker.get_wallet_and_session(&user_id)?;
+        let SensitiveWallet::V0(w) = wallet;
+        let site = w.sites.get(&user_id.to_string()).ok_or(NgError::UserNotFound)?;
+        let user_priv = site.get_individual_user_priv_key().ok_or(NgError::NotFound)?;
+        let core = site.cores[0];  //TODO: cycle the other cores on failure to connect
+        let server_peer_id = core.0;
+        let infos = w.brokers.get(&server_peer_id.to_string()).ok_or(NgError::BrokerNotFound)?;
+        let mut server_peer_id = None;
+        let mut bind_address = None;
+        for info in infos {
+            if let BrokerInfoV0::ServerV0(server) = info {
+                match &server.server_type {
+                    BrokerServerTypeV0::Localhost(port) =>
+                        bind_address = Some(BindAddress::new_localhost_with_port(*port)),
+                    BrokerServerTypeV0::BoxPrivate(addresses) |
+                    BrokerServerTypeV0::Public(addresses) |
+                    BrokerServerTypeV0::BoxPublicDyn(addresses) =>
+                        if addresses.len() > 0 {
+                            bind_address = Some(addresses[0])
+                        },
+                    BrokerServerTypeV0::Domain(domain) =>
+                        /* Use default port will be WS_PORT.
+                         * parse_ipv4_and_port do not perform name resolution, but could if desired. */
+                        bind_address = parse_ip_and_port_for(domain.clone(), "broker's domain").ok()
+                };
+                if bind_address != None {
+                    server_peer_id = Some(server.peer_id);
+                    break
+                }
+            }
+        }
+        let server_peer_id = server_peer_id.ok_or(NgError::BrokerError)?;
+        let bind_address = bind_address.ok_or(NgError::BrokerError)?;
+        (server_peer_id, user_priv, bind_address)
+    };
     let (peer_privk, peer_pubk) = generate_keypair();
     BROKER
         .write()
@@ -3163,6 +3211,7 @@ async fn do_admin_call<
             cmd,
         )
         .await
+        .map_err(|e| NgError::ProtocolError(e))
 }
 
 async fn do_ext_call<
@@ -3185,17 +3234,8 @@ async fn do_ext_call<
 }
 
 #[doc(hidden)]
-pub async fn admin_create_user(
-    server_peer_id: DirectPeerId,
-    admin_user_key: PrivKey,
-    server_addr: BindAddress,
-) -> Result<UserId, ProtocolError> {
-    let res = do_admin_call(
-        server_peer_id,
-        admin_user_key,
-        server_addr,
-        CreateUser::V0(CreateUserV0 {}),
-    )
+pub async fn admin_create_user(session_id: u64) -> Result<UserId, ProtocolError> {
+    let res = do_admin_call(session_id, CreateUser::V0(CreateUserV0 {}))
     .await?;
 
     match res {
@@ -3205,19 +3245,8 @@ pub async fn admin_create_user(
 }
 
 #[doc(hidden)]
-pub async fn admin_del_user(
-    server_peer_id: DirectPeerId,
-    admin_user_key: PrivKey,
-    server_addr: BindAddress,
-    user_to_del: PubKey,
-) -> Result<(), ProtocolError> {
-    log_info!("sdk/rust/local_broker.rs: admin_del_users!");
-    let res = do_admin_call(
-        server_peer_id,
-        admin_user_key,
-        server_addr,
-        DelUser::V0(DelUserV0{ user: user_to_del }),
-    )
+pub async fn admin_del_user(session_id: u64, user_to_del: PubKey) -> Result<(), ProtocolError> {
+    let res = do_admin_call(session_id, DelUser::V0(DelUserV0{ user: user_to_del }))
     .await?;
 
     match res {
@@ -3228,18 +3257,11 @@ pub async fn admin_del_user(
 
 #[doc(hidden)]
 pub async fn admin_modify_user(
-    server_peer_id: DirectPeerId,
-    admin_user_key: PrivKey,
-    server_addr: BindAddress,
+    session_id: u64,
     user_to_modify: PubKey,
     set_admin: bool,
 ) -> Result<(), ProtocolError> {
-    let res = do_admin_call(
-        server_peer_id,
-        admin_user_key,
-        server_addr,
-        ModifyUser::V0(ModifyUserV0{ user: user_to_modify, set_admin }),
-    )
+    let res = do_admin_call(session_id, ModifyUser::V0(ModifyUserV0{ user: user_to_modify, set_admin }))
     .await?;
 
     match res {
@@ -3250,18 +3272,10 @@ pub async fn admin_modify_user(
 
 #[doc(hidden)]
 pub async fn admin_list_users(
-    server_peer_id: DirectPeerId,
-    admin_user_key: PrivKey,
-    server_addr: BindAddress,
+    session_id: u64,
     admins: bool,
 ) -> Result<Vec<PubKey>, ProtocolError> {
-    log_info!("sdk/rust/local_broker.rs: admin_list_users!");
-    let res = do_admin_call(
-        server_peer_id,
-        admin_user_key,
-        server_addr,
-        ListUsers::V0(ListUsersV0 { admins }),
-    )
+    let res = do_admin_call(session_id, ListUsers::V0(ListUsersV0 { admins }))
     .await?;
 
     match res {
@@ -3272,18 +3286,10 @@ pub async fn admin_list_users(
 
 #[doc(hidden)]
 pub async fn admin_usage_stats(
-    server_peer_id: DirectPeerId,
-    admin_user_key: PrivKey,
-    server_addr: BindAddress,
+    session_id: u64,
     user: PubKey,
 ) -> Result<UsageStats, ProtocolError> {
-    log_info!("sdk/rust/local_broker.rs: admin_usage_stats!");
-    let res = do_admin_call(
-        server_peer_id,
-        admin_user_key,
-        server_addr,
-        RequestUsageStats::V0(RequestUsageStatsV0{ user }),
-    )
+    let res = do_admin_call(session_id, RequestUsageStats::V0(RequestUsageStatsV0{ user }))
     .await?;
 
     match res {

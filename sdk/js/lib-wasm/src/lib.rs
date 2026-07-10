@@ -813,17 +813,10 @@ pub async fn signature_request(session_id: JsValue, nuri: JsValue) -> Result<JsV
 
 #[cfg(wasmpack_target = "nodejs")]
 #[wasm_bindgen]
-pub async fn admin_create_user(config: JsValue) -> Result<JsValue, String> {
-    let config = HeadLessConfigStrings::load(config)?;
-    let admin_user_key = config
-        .admin_user_key
-        .ok_or("No admin_user_key found in config nor env var.".to_string())?;
-
-    let res = nextgraph::local_broker::admin_create_user(
-        config.server_peer_id,
-        admin_user_key,
-        config.server_addr,
-    )
+pub async fn admin_create_user(session_id: JsValue) -> Result<JsValue, String> {
+    let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id.clone())
+        .map_err(|_| "Deserialization error of session_id")?;
+    let res = nextgraph::local_broker::admin_create_user(session_id)
     .await
     .map_err(|e: ProtocolError| e.to_string())?;
 
@@ -831,66 +824,46 @@ pub async fn admin_create_user(config: JsValue) -> Result<JsValue, String> {
 }
 
 #[wasm_bindgen]
-pub async fn admin_del_user(server_peer_id: JsValue, user_priv_key: JsValue, server_ip: String, user_to_del: JsValue) -> Result<(), String> {
-    let server_peer_id = serde_wasm_bindgen::from_value::<DirectPeerId>(server_peer_id)
-        .map_err(|_| "Deserialization error of DirectPeerId")?;
-    let user_priv_key = serde_wasm_bindgen::from_value::<PrivKey>(user_priv_key)
-        .map_err(|_| "Deserialization error of PrivKey")?;
-    let server_addr = BindAddress::of_ws_url(server_ip);
+pub async fn admin_del_user(session_id: JsValue, user_to_del: JsValue) -> Result<(), String> {
+    let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id.clone())
+        .map_err(|_| "Deserialization error of session_id")?;
     let user_to_del = serde_wasm_bindgen::from_value::<PubKey>(user_to_del)
         .map_err(|_| "Deserialization error of user_to_del")?;
-    nextgraph::local_broker::admin_del_user(
-        server_peer_id, user_priv_key, server_addr, user_to_del
-    )
+    nextgraph::local_broker::admin_del_user(session_id, user_to_del)
     .await
     .map_err(|e: ProtocolError| e.to_string())?;
     Ok(())
 }
 
 #[wasm_bindgen]
-pub async fn admin_modify_user(server_peer_id: JsValue, user_priv_key: JsValue, server_ip: String, user_to_modify: JsValue, set_admin: bool) -> Result<(), String> {
-    let server_peer_id = serde_wasm_bindgen::from_value::<DirectPeerId>(server_peer_id)
-        .map_err(|_| "Deserialization error of DirectPeerId")?;
-    let user_priv_key = serde_wasm_bindgen::from_value::<PrivKey>(user_priv_key)
-        .map_err(|_| "Deserialization error of PrivKey")?;
-    let server_addr = BindAddress::of_ws_url(server_ip);
+pub async fn admin_modify_user(session_id: JsValue, user_to_modify: JsValue, set_admin: bool) -> Result<(), String> {
+    let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id.clone())
+        .map_err(|_| "Deserialization error of session_id")?;
     let user_to_modify = serde_wasm_bindgen::from_value::<PubKey>(user_to_modify)
         .map_err(|_| "Deserialization error of user_to_modify")?;
-    nextgraph::local_broker::admin_modify_user(
-        server_peer_id, user_priv_key, server_addr, user_to_modify, set_admin
-    )
+    nextgraph::local_broker::admin_modify_user(session_id, user_to_modify, set_admin)
     .await
     .map_err(|e: ProtocolError| e.to_string())?;
     Ok(())
 }
 
 #[wasm_bindgen]
-pub async fn admin_list_users(server_peer_id: JsValue, user_priv_key: JsValue, server_ip: String, admins: bool) -> Result<JsValue, String> {
-    let server_peer_id = serde_wasm_bindgen::from_value::<DirectPeerId>(server_peer_id)
-        .map_err(|_| "Deserialization error of DirectPeerId")?;
-    let user_priv_key = serde_wasm_bindgen::from_value::<PrivKey>(user_priv_key)
-        .map_err(|_| "Deserialization error of PrivKey")?;
-    let server_addr = BindAddress::of_ws_url(server_ip);
-    let users = nextgraph::local_broker::admin_list_users(
-        server_peer_id, user_priv_key, server_addr, admins
-    )
+pub async fn admin_list_users(session_id: JsValue, admins: bool) -> Result<JsValue, String> {
+    let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id.clone())
+        .map_err(|_| "Deserialization error of session_id")?;
+    let users = nextgraph::local_broker::admin_list_users(session_id, admins)
     .await
     .map_err(|e: ProtocolError| e.to_string())?;
     Ok(serde_wasm_bindgen::to_value(&users).unwrap())
 }
 
 #[wasm_bindgen]
-pub async fn admin_usage_stats(server_peer_id: JsValue, user_priv_key: JsValue, server_ip: String, user: JsValue) -> Result<JsValue, String> {
-    let server_peer_id = serde_wasm_bindgen::from_value::<DirectPeerId>(server_peer_id)
-        .map_err(|_| "Deserialization error of DirectPeerId")?;
-    let user_priv_key = serde_wasm_bindgen::from_value::<PrivKey>(user_priv_key)
-        .map_err(|_| "Deserialization error of PrivKey")?;
-    let server_addr = BindAddress::of_ws_url(server_ip);
+pub async fn admin_usage_stats(session_id: JsValue, user: JsValue) -> Result<JsValue, String> {
+    let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id.clone())
+        .map_err(|_| "Deserialization error of session_id")?;
     let user = serde_wasm_bindgen::from_value::<PubKey>(user)
         .map_err(|_| "Deserialization error of PubKey")?;
-    let stats = nextgraph::local_broker::admin_usage_stats(
-        server_peer_id, user_priv_key, server_addr, user
-    )
+    let stats = nextgraph::local_broker::admin_usage_stats(session_id, user)
     .await
     .map_err(|e: ProtocolError| e.to_string())?;
     Ok(serde_wasm_bindgen::to_value(&stats).unwrap())

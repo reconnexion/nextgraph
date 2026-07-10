@@ -347,6 +347,7 @@ where
             } else if proto_err == ProtocolError::NoError {
                 close_ws(&mut ws, &mut receiver, 1000, "").await?;
             } else {
+                log_debug!("ProtocolError: {:?}", proto_err);
                 let mut code = proto_err.clone() as u16;
                 if code > 949 {
                     code = ProtocolError::OtherError as u16;
