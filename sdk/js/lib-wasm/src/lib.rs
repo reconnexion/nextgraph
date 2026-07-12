@@ -42,7 +42,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 use wasm_bindgen_futures::JsFuture;
 
-use ng_repo::errors::{NgError, ProtocolError};
+use ng_repo::errors::{NgError, ProtocolError, ServerError};
 use ng_repo::log::*;
 use ng_repo::types::*;
 use ng_repo::utils::{decode_key, decode_priv_key};
@@ -51,7 +51,7 @@ use ng_net::app_protocol::*;
 use ng_net::broker::*;
 use ng_net::types::{
     BindAddress, BootstrapContentV0, ClientInfo, ClientInfoV0, ClientType, CreateAccountBSP,
-    InboxPost, IP,
+    InboxPost, PluginRequest, PluginResponse, PluginNotify, PluginNotification, IP, ServicePlugin, PluginStatus,
 };
 use ng_net::utils::{
     decode_invitation_string, parse_ip_and_port_for, retrieve_local_bootstrap, retrieve_local_url,
@@ -875,6 +875,54 @@ pub async fn admin_usage_stats(session_id: JsValue, user: JsValue) -> Result<JsV
     .await
     .map_err(|e: ProtocolError| e.to_string())?;
     Ok(serde_wasm_bindgen::to_value(&stats).unwrap())
+}
+
+#[wasm_bindgen]
+pub async fn admin_service_plugin_set_status(
+    session_id: JsValue,
+    name: String,
+    peer_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id.clone())
+        .map_err(|_| "Deserialization error of session_id")?;
+    nextgraph::local_broker::admin_service_plugin_set_status(session_id, name, peer_id, enabled)
+        .await
+        .map_err(|e: ProtocolError| e.to_string())?;
+    Ok(())
+}
+
+/// ServicePlugin as seen from JS: peer_id is in the same string form as
+/// admin_service_plugin_update takes it.
+#[derive(Serialize)]
+struct ServicePluginStrings {
+    name: String,
+    peer_id: String,
+    status: PluginStatus,
+}
+
+impl From<ServicePlugin> for ServicePluginStrings {
+    fn from(serv: ServicePlugin) -> Self {
+        ServicePluginStrings {
+            name: serv.name,
+            peer_id: serv.peer_id.to_string(),
+            status: serv.status,
+        }
+    }
+}
+
+#[wasm_bindgen]
+pub async fn admin_service_plugin_list(session_id: JsValue) -> Result<JsValue, String> {
+    let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id.clone())
+        .map_err(|_| "Deserialization error of session_id")?;
+    let servs: Vec<ServicePluginStrings> =
+        nextgraph::local_broker::admin_service_plugin_list(session_id)
+            .await
+            .map_err(|e: ProtocolError| e.to_string())?
+            .into_iter()
+            .map(Into::into)
+            .collect();
+    Ok(serde_wasm_bindgen::to_value(&servs).unwrap())
 }
 
 #[wasm_bindgen]
@@ -2253,6 +2301,127 @@ pub async fn probe() {
     log_debug!("broker.probe : {:?}", _res);
 
     let _ = Broker::join_shutdown_with_timeout(std::time::Duration::from_secs(5)).await;
+}
+
+/// Tells the broker that we can handle plugin requests for a given plugin-name.
+/// Pass a callback function to handle all requests. It's going to be called as
+/// `callback(caller, service_name, request)`, where `caller` is either:
+/// - `{User: user_id}` with the usual JS form of a user id: `{Ed25519PubKey: [...]}`
+/// - or `{Plugin: "service_name"}` when the request is coming from another plugin.
+/// `callback` must returns a (promise of) a value that's going to be JSONified.
+/// `notify_callback(service_name, notification)` is called for each notification from
+/// the broker, such as `{StatusChange: "Enabled"}`; its return value is ignored.
+/// Resolves to the plugin status ("Waiting", "Enabled" or "Denied"): requests are
+/// only forwarded if it is "Enabled".
+#[cfg(wasmpack_target = "nodejs")]
+#[wasm_bindgen]
+pub async fn plugin_register(
+    service_name: String,
+    callback: &js_sys::Function,
+    notify_callback: &js_sys::Function,
+) -> Result<JsValue, String> {
+    let (handler, incomings) = mpsc::unbounded();
+    let status = nextgraph::local_broker::plugin_register(service_name, handler)
+        .await
+        .map_err(|e: NgError| e.to_string())?;
+
+    async fn dispatch_loop(
+        mut incomings: Receiver<PluginIncoming>,
+        callback: js_sys::Function,
+        notify_callback: js_sys::Function,
+    ) -> ResultSend<()> {
+        while let Some(incoming) = incomings.next().await {
+            match incoming {
+                PluginIncoming::Request(request, reply) => {
+                    // Don't block other requests:
+                    let callback = callback.clone();
+                    spawn_and_log_error(async move {
+                        let _ = reply.send(call_plugin_callback(&callback, request).await);
+                        Ok(())
+                    });
+                }
+                PluginIncoming::Notify(notification) => {
+                    call_notify_callback(&notify_callback, notification)
+                }
+            }
+        }
+        log_debug!("dispatch_loop: End of plugin requests");
+        Ok(())
+    }
+
+    spawn_and_log_error(dispatch_loop(incomings, callback.clone(), notify_callback.clone()));
+    Ok(serde_wasm_bindgen::to_value(&status).unwrap())
+}
+
+#[cfg(wasmpack_target = "nodejs")]
+fn call_notify_callback(callback: &js_sys::Function, notify: PluginNotify) {
+    let PluginNotify { service_name, notification } = notify;
+    match serde_wasm_bindgen::to_value(&notification) {
+        Ok(value) => {
+            if let Err(e) = callback.call2(&JsValue::null(), &service_name.into(), &value) {
+                log_err!("call_notify_callback: Callback failed with {:?}", e);
+            }
+        }
+        Err(e) => log_err!("call_notify_callback: Cannot convert {:?}: {:?}", notification, e),
+    }
+}
+
+#[cfg(wasmpack_target = "nodejs")]
+async fn call_plugin_callback(
+    callback: &js_sys::Function,
+    request: PluginRequest,
+) -> Result<PluginResponse, ServerError> {
+    let payload = js_sys::JSON::parse(&request.request_payload)
+        .map_err(|_| ServerError::InvalidRequest)?;
+    let caller = request.caller.ok_or(ServerError::InvalidRequest)?;
+    let caller = serde_wasm_bindgen::to_value(&caller).map_err(|_| ServerError::OtherError)?;
+
+    let returned = callback
+        .call3(&JsValue::null(), &caller, &request.service_name.into(), &payload)
+        .map_err(|e| {
+            log_err!("call_plugin_callback: Callback failed with {:?}", e);
+            ServerError::PluginError
+        })?;
+    let response = match returned.dyn_into::<js_sys::Promise>() {
+        Ok(promise) => JsFuture::from(promise).await.map_err(|e| {
+            log_err!("call_plugin_callback: Promise failed with {:?}", e);
+            ServerError::PluginError
+        })?,
+        Err(value) => value,
+    };
+    // In case the response is undefined (JSON.stringify would not be a string)
+    let response = if response.is_undefined() {
+        JsValue::NULL
+    } else {
+        response
+    };
+    let response_payload = js_sys::JSON::stringify(&response).map_err(|e| {
+        log_err!("call_plugin_callback: Cannot JSON-stringify response: {:?}", e);
+        ServerError::PluginError
+    })?;
+    Ok(PluginResponse {
+        response_payload: response_payload.into(),
+    })
+}
+
+/// Sends `request` (as JSON) to the plugin `service_name` and returns its response.
+#[wasm_bindgen]
+pub async fn call_plugin(
+    session_id: JsValue, // Ignored in headless mode
+    service_name: String,
+    request: JsValue,
+) -> Result<JsValue, String> {
+    let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id)
+        .map_err(|_| "call_plugin: Deserialization error of session_id".to_string())?;
+    let request_payload: String = js_sys::JSON::stringify(&request)
+        .map_err(|_| "call_plugin: Cannot JSON-stringify the request".to_string())?
+        .into();
+    let response_payload =
+        nextgraph::local_broker::plugin_request(session_id, service_name, request_payload)
+            .await
+            .map_err(|e: NgError| e.to_string())?;
+    js_sys::JSON::parse(&response_payload)
+        .map_err(|_| "call_plugin: Cannot JSON-parse the plugin response".to_string())
 }
 
 #[cfg(wasmpack_target = "nodejs")]

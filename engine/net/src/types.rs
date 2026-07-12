@@ -13,10 +13,10 @@
 
 use core::fmt;
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::{
     any::{Any, TypeId},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, AddrParseError},
+    time::{Duration},
 };
 
 use serde::{Deserialize, Serialize};
@@ -1702,7 +1702,7 @@ impl std::str::FromStr for IP {
     fn from_str(s: &str) -> Result<Self, AddrParseError> {
         /* FIXME: Relax admin calls to accept hostnames rather than IPs or
          * do not allow hostnames in WS URLs (at the type level) */
-        let s = if (s == "localhost") { "127.0.0.1" } else { s };
+        let s = if s == "localhost" { "127.0.0.1" } else { s };
         let ip_addr = s.parse::<IpAddr>()?;
         return Ok((&ip_addr).into());
     }
@@ -2767,6 +2767,11 @@ pub enum AppMessageContentV0 {
     SessionStop(AppSessionStop),
     SessionStart(AppSessionStart),
     EmptyResponse,
+    PluginRegister(AppPluginRegister),
+    PluginRegisterResp(AppPluginRegisterResp),
+    PluginRequest(PluginRequest),   // in both directions
+    PluginResponse(PluginResponse),  // in both directions
+    PluginNotify(PluginNotify),   // only from Broker to plugin
 }
 
 /// AppMessageV0
@@ -2805,9 +2810,14 @@ impl AppMessage {
                 AppMessageContentV0::Request(req) => req.get_actor(*id),
                 AppMessageContentV0::SessionStop(req) => req.get_actor(*id),
                 AppMessageContentV0::SessionStart(req) => req.get_actor(*id),
-                AppMessageContentV0::Response(_) | AppMessageContentV0::EmptyResponse => {
-                    panic!("it is not a request");
-                }
+                AppMessageContentV0::Response(_)
+                | AppMessageContentV0::EmptyResponse
+                | AppMessageContentV0::PluginRegisterResp(_)
+                | AppMessageContentV0::PluginResponse(_) =>
+                    panic!("it is not a request"),
+                AppMessageContentV0::PluginRegister(req) => req.get_actor(*id),
+                AppMessageContentV0::PluginRequest(req) => req.get_actor(*id),
+                AppMessageContentV0::PluginNotify(req) => req.get_actor(*id),
             },
         }
     }
@@ -2829,6 +2839,43 @@ impl From<AppMessage> for ProtocolMessage {
     }
 }
 
+/// The caller of a PluginRequest can be a normal client or another plugin:
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum PluginCaller { User(UserId), Plugin(String) }
+
+/// The broker will wait that long for a plugin to answer a PluginRequest:
+pub const PLUGIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// A PluginRequest: from who to who and an opaque payload:
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PluginRequest {
+    /// Recipient service name:
+    pub service_name: String,
+    /// The payload as a JSON string to be forwarded to the plugin handler.
+    pub request_payload: String,
+    /// Who is calling. Set by the broker when forwarding, never by the caller.
+    pub caller: Option<PluginCaller>,
+}
+
+/// Notification from the broker to a plugin.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PluginNotify {
+    pub service_name: String,
+    pub notification: PluginNotification,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum PluginNotification {
+    /// The admin changed the status of this plugin.
+    StatusChange(PluginStatus),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PluginResponse {
+    /// The JSON string to forward back to the original caller.
+    pub response_payload: String,
+}
+
 //
 // ADMIN PROTOCOL
 //
@@ -2845,6 +2892,8 @@ pub enum AdminRequestContentV0 {
     #[doc(hidden)]
     CreateUser(CreateUser),
     RequestUsageStats(RequestUsageStats),
+    RequestServicePluginSetStatus(RequestServicePluginSetStatus),
+    RequestServicePluginList(RequestServicePluginList),
 }
 impl AdminRequestContentV0 {
     pub fn type_id(&self) -> TypeId {
@@ -2857,6 +2906,8 @@ impl AdminRequestContentV0 {
             Self::AddInvitation(a) => a.type_id(),
             Self::CreateUser(a) => a.type_id(),
             Self::RequestUsageStats(a) => a.type_id(),
+            Self::RequestServicePluginSetStatus(a) => a.type_id(),
+            Self::RequestServicePluginList(a) => a.type_id(),
         }
     }
     pub fn get_actor(&self) -> Box<dyn EActor> {
@@ -2869,6 +2920,8 @@ impl AdminRequestContentV0 {
             Self::AddInvitation(a) => a.get_actor(),
             Self::CreateUser(a) => a.get_actor(),
             Self::RequestUsageStats(a) => a.get_actor(),
+            Self::RequestServicePluginSetStatus(a) => a.get_actor(),
+            Self::RequestServicePluginList(a) => a.get_actor(),
         }
     }
 }
@@ -2955,6 +3008,7 @@ pub enum AdminResponseContentV0 {
     Invitation(Invitation),
     UserId(UserId),
     UsageStats(UsageStats),
+    ServicePluginList(Vec<ServicePlugin>),
 }
 
 /// Response to an `AdminRequest` V0
@@ -3271,6 +3325,38 @@ impl StorageStats {
         self.current += bytes;
         self.max = std::cmp::max(self.max, self.current);
     }
+}
+
+//
+// Services
+// For now services are opaque modules that have just a name and an
+// address. Later on we likely want them to somehow provide some kind of manifest.
+// Typical use-cases: an SMTP relay service, an ActivityPub relay service...
+//
+// In theory, they should auto-register, so that the server administrator can
+// merely pour some additional images into its server and be done. Until this
+// flow becomes clearer, an admin user has to register each of them using the
+// admin protocol.
+//
+// They can be globally enabled/disabled for the broker. Later on also maybe per account.
+//
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServicePlugin {
+    /* A given client (peer_id) could register several plugin names.
+     * Several clients could claim the same plugin names.
+     * Therefore, the key of a given plugin is the plugin name and the peer id. */
+    pub name: String,
+    pub peer_id: DirectPeerId,
+    /* Only relay messages from/to this plugin only if this is set: */
+    pub status: PluginStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PluginStatus {
+    Waiting,  // for the admin to enable or deny
+    Enabled,  // the plugin is allowed to take messages and impersonate users
+    Denied,   // this decision is final for the plugin (can be reverted though)
 }
 
 //
@@ -4060,6 +4146,8 @@ pub enum ClientRequestContentV0 {
 
     InboxRegister(InboxRegister),
     InboxPost(InboxPost),
+
+    PluginRequest(PluginRequest),
 }
 
 impl ClientRequestContentV0 {
@@ -4077,6 +4165,7 @@ impl ClientRequestContentV0 {
             ClientRequestContentV0::BlocksExist(a) => a.set_overlay(overlay),
             ClientRequestContentV0::BlocksGet(a) => a.set_overlay(overlay),
             ClientRequestContentV0::WalletPutExport(_a) => {}
+            ClientRequestContentV0::PluginRequest(_a) => {}
             _ => unimplemented!(),
         }
     }
@@ -4131,6 +4220,7 @@ impl ClientRequest {
                 ClientRequestContentV0::WalletPutExport(r) => r.get_actor(self.id()),
                 ClientRequestContentV0::InboxRegister(r) => r.get_actor(self.id()),
                 ClientRequestContentV0::InboxPost(r) => r.get_actor(self.id()),
+                ClientRequestContentV0::PluginRequest(r) => r.get_actor(self.id()),
                 _ => unimplemented!(),
             },
         }
@@ -4276,6 +4366,7 @@ pub enum ClientResponseContentV0 {
     TopicSyncRes(TopicSyncRes),
     BlocksFound(BlocksFound),
     RepoPinStatus(RepoPinStatus),
+    PluginResponse(PluginResponse),
 }
 
 /// Response to a `ClientRequest`

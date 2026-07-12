@@ -1028,6 +1028,19 @@ impl AppSessionStart {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppPluginRegister {
+    /// The well-known name of the plugin
+    pub service_name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum AppPluginRegisterResp{
+    V0 {
+        status: PluginStatus,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DocQuery {
     V0 {
         sparql: String,

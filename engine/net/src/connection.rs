@@ -16,6 +16,7 @@
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 
 use async_std::stream::StreamExt;
@@ -313,6 +314,10 @@ impl NoiseFSM {
         if self.user.is_none() {
             self.user = Some(user);
         }
+    }
+
+    pub(crate) fn dir(&self) -> &ConnectionDir {
+        &self.dir
     }
 
     fn decrypt(&mut self, ciphertext: &Noise) -> Result<ProtocolMessage, ProtocolError> {
@@ -1352,22 +1357,67 @@ impl ConnectionBase {
         &self,
         msg: A,
     ) -> Result<SoS<B>, NgError> {
-        if self.fsm.is_none() {
-            return Err(NgError::ProtocolError(ProtocolError::FsmNotReady));
-        }
+        self.prepare_request(msg)?.await
+    }
 
+    pub fn prepare_request<
+        A: Into<ProtocolMessage> + std::fmt::Debug + Sync + Send + 'static,
+        B: TryFrom<ProtocolMessage, Error = ProtocolError> + std::fmt::Debug + Sync + Send + 'static,
+    >(
+        &self,
+        msg: A,
+    ) -> Result<impl Future<Output = Result<SoS<B>, NgError>> + 'static, NgError> {
+        Ok(self.prepare_request_with_id(msg)?.1)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn prepare_request_with_timeout<
+        A: Into<ProtocolMessage> + std::fmt::Debug + Sync + Send + 'static,
+        B: TryFrom<ProtocolMessage, Error = ProtocolError> + std::fmt::Debug + Sync + Send + 'static,
+    >(
+        &self,
+        msg: A,
+        timeout: std::time::Duration,
+    ) -> Result<impl Future<Output = Result<SoS<B>, NgError>> + 'static, NgError> {
+        let (id, request) = self.prepare_request_with_id(msg)?;
+        let actors = Arc::clone(&self.actors);
+        Ok(async move {
+            match async_std::future::timeout(timeout, request).await {
+                Ok(res) => res,
+                Err(_) => {
+                    actors.lock().await.remove(&id);
+                    Err(NgError::ProtocolError(ProtocolError::Timeout))
+                }
+            }
+        })
+    }
+
+    /// Perform a request asynchronously without borrowing the connection, so that
+    /// it can be awaited without holding any lock.
+    fn prepare_request_with_id<
+        A: Into<ProtocolMessage> + std::fmt::Debug + Sync + Send + 'static,
+        B: TryFrom<ProtocolMessage, Error = ProtocolError> + std::fmt::Debug + Sync + Send + 'static,
+    >(
+        &self,
+        msg: A,
+    ) -> Result<(i64, impl Future<Output = Result<SoS<B>, NgError>> + 'static), NgError> {
+        let fsm = Arc::clone(
+            self.fsm
+                .as_ref()
+                .ok_or(NgError::ProtocolError(ProtocolError::FsmNotReady))?,
+        );
+        let actors = Arc::clone(&self.actors);
         let mut id = self.next_request_id.next_id();
         if self.dir == ConnectionDir::Server {
             id = !id + 1;
         }
-        let mut actor = Box::new(Actor::<A, B>::new(id, true));
-        self.actors.lock().await.insert(id, actor.get_receiver_tx());
-        let mut proto_msg: ProtocolMessage = msg.into();
-        proto_msg.set_id(id);
-        let res = actor
-            .request(proto_msg, Arc::clone(self.fsm.as_ref().unwrap()))
-            .await;
-        res
+        Ok((id, async move {
+            let mut actor = Box::new(Actor::<A, B>::new(id, true));
+            actors.lock().await.insert(id, actor.get_receiver_tx());
+            let mut proto_msg: ProtocolMessage = msg.into();
+            proto_msg.set_id(id);
+            actor.request(proto_msg, fsm).await
+        }))
     }
 
     // FIXME: why not use the FSM instead? looks like this is sending messages to the wire, unencrypted.

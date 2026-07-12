@@ -21,3 +21,9 @@ pub use usage_stats::*;
 
 pub mod modify_user;
 pub use modify_user::*;
+
+pub mod service_plugin_put;
+pub use service_plugin_put::*;
+
+pub mod service_plugin_list;
+pub use service_plugin_list::*;

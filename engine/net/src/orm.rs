@@ -450,6 +450,54 @@ impl OrmConfig {
         })
     }
 
+    /// Returns a Vec<(property name, is_asc)>
+    fn parse_order_by(order_by: &serde_json::Value) -> Result<Vec<(String, bool)>, String> {
+        /// For a Value::Object {<propertyToOrderBy>: "asc" | "desc"}, return Ok("property", is_asc)
+        fn parse_obj(
+            obj: &serde_json::Map<String, serde_json::Value>,
+        ) -> Result<(String, bool), String> {
+            if obj.len() != 1 {
+                return Err(
+                    "Order by object must have exactly 1 property (key -> 'asc'|'desc')"
+                        .to_string(),
+                );
+            }
+            let (property, asc_or_desc) = obj.iter().next().unwrap();
+            let is_asc = match asc_or_desc {
+                serde_json::Value::String(str) => {
+                    if str == "asc" {
+                        true
+                    } else if str == "desc" {
+                        false
+                    } else {
+                        return Err("Order by value must be 'asc' or 'desc'.".into());
+                    }
+                }
+                _ => return Err("Order by value must be a string 'asc' or 'desc'.".into()),
+            };
+
+            Ok((property.clone(), is_asc))
+        }
+
+        match order_by {
+            serde_json::Value::Object(obj) => Ok(vec![parse_obj(obj)?]),
+            serde_json::Value::Array(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    let obj = item.as_object().ok_or_else(|| {
+                        "Each item in order by config must be an object".to_string()
+                    })?;
+                    out.push(parse_obj(obj)?);
+                }
+                Ok(out)
+            }
+            _ => Err(format!(
+                "When defined, order by config must be an object or an array of objects. Got: {:?}",
+                order_by
+            )),
+        }
+    }
+
     /// Returns Some(page_size * max_active_pages), if both are set, else None.
     pub fn max_allowed_items(&self) -> Option<usize> {
         if self.max_active_pages > 0 && self.page_size > 0 {

@@ -30,6 +30,10 @@ pub const CHILD_SIZE: usize = 66;
 pub const BLOCK_ID_SIZE: usize = 33;
 /// Size of serialized SymKey
 pub const BLOCK_KEY_SIZE: usize = 33;
+/// Size of serialized DirectPeerId
+pub const DIRECT_PEER_ID_SIZE: usize = 33;
+/// Size of a blake3::hash
+pub const BLAKE3_HASH_SIZE: usize = 32;
 /// Size of serialized Object with deps reference.
 /// Varint extra bytes when reaching the maximum value we will ever use in one block
 pub const BIG_VARINT_EXTRA: usize = 2;

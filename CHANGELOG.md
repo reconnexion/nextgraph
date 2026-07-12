@@ -142,7 +142,7 @@ Access the sub-sections directly :
 
 #### Added
 
--   AdminProtocol : UsageStats
+-   AdminProtocol : UsageStats, ServicePlugin, User del/modify
 
 ### Broker [0.1.1-alpha] - 2024-09-02
 

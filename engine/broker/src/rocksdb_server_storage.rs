@@ -28,7 +28,7 @@ use ng_storage_rocksdb::block_storage::RocksDbBlockStorage;
 use ng_storage_rocksdb::kcv_storage::RocksDbKCVStorage;
 
 use crate::server_broker::*;
-use crate::server_storage::admin::{account::Account, invitation::Invitation, wallet::Wallet};
+use crate::server_storage::admin::{account::Account, invitation::Invitation, wallet::Wallet, service_plugin::ServicePlugin};
 use crate::server_storage::core::*;
 
 pub(crate) struct RocksDbServerStorage {
@@ -148,6 +148,7 @@ impl RocksDbServerStorage {
             core_storage.add_class(&CommitStorage::CLASS);
             core_storage.add_class(&InboxStorage::CLASS);
             core_storage.add_class(&AccountStorage::CLASS);
+            // TODO: ServicePluginStorage
             core_storage.check_prefixes();
         }
 
@@ -811,5 +812,20 @@ impl RocksDbServerStorage {
     ) -> Result<(), StorageError> {
         let acc = Account::open(&user_id, &self.accounts_storage)?;
         acc.usage_stats_update(net_stats, storage_bytes)
+    }
+
+    pub(crate) fn service_plugin_put(&self, serv: &ng_net::types::ServicePlugin, for_create: bool) -> Result<(), StorageError> {
+        if for_create {
+            ServicePlugin::create(serv, &self.core_storage)?;
+        } else {
+            ServicePlugin::update(serv, &self.core_storage)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn service_plugin_list(&self) -> Result<Vec<ng_net::types::ServicePlugin>, StorageError> {
+        ServicePlugin::list(&self.core_storage)
+    }
+    pub(crate) fn service_plugin_get(&self, name: &String, peer_id: &DirectPeerId) -> Result<ng_net::types::ServicePlugin, StorageError> {
+        ServicePlugin::get(&self.core_storage, name, peer_id)
     }
 }

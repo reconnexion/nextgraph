@@ -30,11 +30,11 @@ use zeroize::Zeroize;
 
 use ng_repo::block_storage::BlockStorage;
 use ng_repo::block_storage::HashMapBlockStorage;
-use ng_repo::errors::{NgError, ProtocolError, VerifierError};
+use ng_repo::errors::{NgError, ProtocolError, ServerError, VerifierError};
 use ng_repo::log::*;
 use ng_repo::os_info::get_os_info;
 use ng_repo::types::*;
-use ng_repo::utils::{derive_key, encrypt_in_place, generate_keypair};
+use ng_repo::utils::{decode_key, derive_key, encrypt_in_place, generate_keypair};
 
 use ng_net::app_protocol::*;
 use ng_net::broker::*;
@@ -814,22 +814,30 @@ impl LocalBroker {
         &self,
         req: A,
     ) -> Result<B, NgError> {
+        self.prepare_request_headless(req).await?.await
+    }
+
+    /// Returns a future that does not borrow the local broker (lock can be dropped before await).
+    pub(crate) async fn prepare_request_headless<
+        A: Into<ProtocolMessage> + std::fmt::Debug + Sync + Send + 'static,
+        B: TryFrom<ProtocolMessage, Error = ProtocolError> + std::fmt::Debug + Sync + Send + 'static,
+    >(
+        &self,
+        req: A,
+    ) -> Result<impl Future<Output = Result<B, NgError>> + 'static, NgError> {
         self.err_if_not_headless()?;
 
-        match BROKER
-            .read()
-            .await
-            .request::<A, B>(
-                &None,
-                &Some(self.config.headless_config().server_peer_id),
-                req,
-            )
-            .await
-        {
-            Err(e) => Err(e),
-            Ok(SoS::Stream(_)) => Err(NgError::InvalidResponse),
-            Ok(SoS::Single(res)) => Ok(res),
-        }
+        let request = BROKER.read().await.prepare_request::<A, B>(
+            &None,
+            &Some(self.config.headless_config().server_peer_id),
+            req,
+        )?;
+        Ok(async move {
+            match request.await? {
+                SoS::Stream(_) => Err(NgError::InvalidResponse),
+                SoS::Single(res) => Ok(res),
+            }
+        })
     }
 
     #[allow(dead_code)]
@@ -842,16 +850,12 @@ impl LocalBroker {
     ) -> Result<(Receiver<B>, CancelFn), NgError> {
         self.err_if_not_headless()?;
 
-        match BROKER
-            .read()
-            .await
-            .request::<A, B>(
-                &None,
-                &Some(self.config.headless_config().server_peer_id),
-                req,
-            )
-            .await
-        {
+        let request = BROKER.read().await.prepare_request::<A, B>(
+            &None,
+            &Some(self.config.headless_config().server_peer_id),
+            req,
+        )?;
+        match request.await {
             Err(e) => Err(e),
             Ok(SoS::Single(_)) => Err(NgError::InvalidResponse),
             Ok(SoS::Stream(stream)) => {
@@ -3113,6 +3117,74 @@ pub async fn app_request_stream(
     }
 }
 
+/// Registers this headless app to the remote broker as the plugin `service_name`.
+/// The requests the broker then forwards to this plugin are sent to `handler`, along
+/// with a oneshot sender for the response.
+/// Returns the plugin status: requests are only forwarded if it is `Enabled`.
+pub async fn plugin_register(
+    service_name: String,
+    handler: PluginHandler,
+) -> Result<PluginStatus, NgError> {
+    let mut broker = match LOCAL_BROKER.get() {
+        None | Some(Err(_)) => return Err(NgError::LocalBrokerNotInitialized),
+        Some(Ok(broker)) => broker.write().await,
+    };
+    broker.connect_remote_broker().await?;
+    // Set before registering, as requests may be forwarded as soon as the broker accepts.
+    BROKER.write().await.set_plugin_handler(handler);
+    let AppPluginRegisterResp::V0 { status } = broker
+        .send_request_headless::<_, AppPluginRegisterResp>(AppPluginRegister {
+            service_name,
+        })
+        .await?;
+    Ok(status)
+}
+
+/// Sends a request to the plugin `service_name` through the remote broker, and returns
+/// its response. Payloads are JSON-encoded.
+pub async fn plugin_request(
+    session_id: u64, // Ignored in headless mode
+    service_name: String,
+    request_payload: String,
+) -> Result<String, NgError> {
+    let request = PluginRequest {
+        service_name,
+        request_payload,
+        caller: None,
+    };
+    let broker = match LOCAL_BROKER.get() {
+        None | Some(Err(_)) => return Err(NgError::LocalBrokerNotInitialized),
+        Some(Ok(broker)) => broker.read().await,
+    };
+    // In both cases, the local broker should not stay locked while the plugin works on it.
+    let response: PluginResponse = if let LocalBrokerConfig::Headless(_) = &broker.config {
+        let response = broker.prepare_request_headless(request).await?;
+        drop(broker);   // Free the lock on LOCAL_BROKER
+        response.await?
+    } else {
+        let (real_session_id, is_remote) = broker.get_real_session_id_for_mut(session_id)?;
+        if is_remote {
+            return Err(NgError::NotImplemented);
+        }
+        let session = broker.opened_sessions_list[real_session_id]
+            .as_ref()
+            .ok_or(NgError::SessionNotFound)?;
+        let response = session
+            .verifier
+            .prepare_client_request::<_, PluginResponse>(ProtocolMessage::from_client_request_v0(
+                ClientRequestContentV0::PluginRequest(request),
+                OverlayId::nil(),
+            ))
+            .await?;
+        drop(broker);   // Free the lock on LOCAL_BROKER
+        match response.await? {
+            SoS::Single(res) => res,
+            SoS::Stream(_) => return Err(NgError::InvalidResponse),
+        }
+    };
+    Ok(response.response_payload)
+}
+
 /// retrieves the ID of one of the 3 stores of a the personal Site (3P: public, protected, or private)
 pub async fn personal_site_store(
     session_id: u64,
@@ -3322,6 +3394,34 @@ pub async fn admin_usage_stats(
     match res {
         AdminResponseContentV0::UsageStats(stats) => Ok(stats),
         _ => Err(ProtocolError::InvalidValue),
+    }
+}
+
+#[doc(hidden)]
+pub async fn admin_service_plugin_set_status(
+    session_id: u64,
+    name: String,  // name and peer_id identify the plugin
+    peer_id: String,
+    enable: bool,  // The new status (the only field that can be modified)
+) -> Result<(), ProtocolError> {
+    let peer_id = decode_key(&peer_id).map_err(|_| ProtocolError::InvalidValue)?;
+    let status =
+        if enable { PluginStatus::Enabled } else { PluginStatus::Denied };
+    let service =
+        ng_net::types::ServicePlugin { name, peer_id, status };
+    do_admin_call(session_id, RequestServicePluginSetStatus::V0(RequestServicePluginSetStatusV0{ service }))
+        .await?;
+    Ok(())
+}
+
+#[doc(hidden)]
+pub async fn admin_service_plugin_list(session_id: u64) -> Result<Vec<ServicePlugin>, ProtocolError> {
+    let res =
+        do_admin_call(session_id, RequestServicePluginList::V0)
+            .await?;
+    match res {
+        AdminResponseContentV0::ServicePluginList(servs) => Ok(servs),
+         _ => Err(ProtocolError::InvalidValue),
     }
 }
 

@@ -316,6 +316,24 @@ async fn main_inner() -> Result<(), NgcliError> {
                         Command::new("usage-stats")
                             .about("Get usage statistics for a given user")
                             .arg(arg!(<USER_ID> "userId if the user whose statistics to print").required(true)))
+                    .subcommand(
+                        Command::new("plugin")
+                            .about("plugins are additional services running on the brokers that can be used by apps to, for instance, connect to the outside world")
+                            .subcommand_required(true)
+                            .subcommand(
+                                Command::new("list")
+                                    .about("list registered plugins"))
+                            .subcommand(
+                                Command::new("enable")
+                                    .about("allow a registered plugin to receive requests")
+                                    .arg(arg!(-n --name <NAME> "name of the plugin").required(true))
+                                    .arg(arg!(-p --"peer-id" <PEER_ID> "peer id of the plugin, as displayed by plugin list").required(true)))
+                            .subcommand(
+                                Command::new("deny")
+                                    .about("deny a registered plugin. This decision is final")
+                                    .arg(arg!(-n --name <NAME> "name of the plugin").required(true))
+                                    .arg(arg!(-p --"peer-id" <PEER_ID> "peer id of the plugin, as displayed by plugin list").required(true)))
+                    )
             )
             .subcommand(
                 Command::new("gen-key")
@@ -839,9 +857,7 @@ async fn main_inner() -> Result<(), NgcliError> {
                             .unwrap()
                             .as_str()
                             .parse()
-                            .map_err(|_| {
-                                NgcliError::OtherConfigErrorStr("supplied admin is invalid")
-                            })?,
+                            .map_err(|_| NgcliError::OtherConfigErrorStr("supplied admin is invalid"))?,
                     }),
                 )
                 .await?;
@@ -999,6 +1015,51 @@ async fn main_inner() -> Result<(), NgcliError> {
                 .await?;
                 println!("Usage statistics for user {}:\n{:#?}", user, res);
                 return Ok(());
+            }
+            Some(("plugin", sub2_matches)) => match sub2_matches.subcommand() {
+                Some(("list", _)) => {
+                    let res = do_admin_call(
+                        keys[1],
+                        config_v0,
+                        RequestServicePluginList::V0,
+                    )
+                    .await?;
+                    match &res {
+                        AdminResponseContentV0::ServicePluginList(list) => {
+                            println!("Registered plugin services:\n");
+                            for srv in list {
+                                println!("{} (peer {}): {:?}", srv.name, srv.peer_id, srv.status);
+                            }
+                        }
+                        _ => return Err(NgError::InvalidResponse.into()),
+                    }
+                    return Ok(());
+                }
+                Some((cmd @ ("enable" | "deny"), sub3_matches)) => {
+                    let name = sub3_matches.get_one::<String>("name").unwrap().clone();
+                    let peer_id = sub3_matches
+                        .get_one::<String>("peer-id")
+                        .unwrap()
+                        .as_str()
+                        .try_into()
+                        .map_err(|_| NgcliError::OtherConfigErrorStr("supplied PEER_ID is invalid"))?;
+                    let status =
+                        if cmd == "enable" { PluginStatus::Enabled } else { PluginStatus::Denied };
+                    let res = do_admin_call(
+                        keys[1],
+                        config_v0,
+                        RequestServicePluginSetStatus::V0(RequestServicePluginSetStatusV0 {
+                            service: ServicePlugin { name, peer_id, status },
+                        }),
+                    )
+                    .await?;
+                    if !matches!(res, AdminResponseContentV0::EmptyResponse) {
+                        return Err(NgError::InvalidResponse.into());
+                    }
+                    println!("Plugin {}d successfully", cmd);
+                    return Ok(());
+                }
+                _ => unreachable!()
             }
             _ => panic!("shouldn't happen"),
         },

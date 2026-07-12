@@ -77,6 +77,7 @@ entrust the credentials of user to an ngd server. coming soon
 - `ng.admin_create_user(0)` creates a new user on the server, and populates their 3P stores. `0` is the session_id to use for admin SDK calls. returns the user_id
 - the other admin functions (`ng.admin_modify_user` etc) can also be called with 0 as the session id.
 - `ng.session_headless_start(user_id)` starts a new session for the user. returns the session info, including the session_id
+- `ng.plugin_register(service_name, handler)` connect to ngd as a service plugin
 - `ng.sparql_query(session_id, "[SPARQL query]", base, nuri)` returns or:
     - for SELECT queries: a JSON Sparql Query Result as a Javascript object. [SPARQL Query Results JSON Format](https://www.w3.org/TR/sparql11-results-json/)
     - for CONSTRUCT queries: a list of quads in the format [RDF-JS data model](http://rdf.js.org/data-model-spec/) that can be used as ingress to RDFjs lib.

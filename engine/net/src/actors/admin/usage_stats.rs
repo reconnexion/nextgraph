@@ -24,14 +24,14 @@ use crate::types::*;
 use crate::{actor::*, types::ProtocolMessage};
 
 /// Request usage statistics V0
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RequestUsageStatsV0 {
     /// User pub key
     pub user: PubKey,
 }
 
 /// Request usage statistics of some given user
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RequestUsageStats {
     V0(RequestUsageStatsV0),
 }

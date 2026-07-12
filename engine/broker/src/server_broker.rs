@@ -32,6 +32,7 @@ use ng_repo::{
 
 use ng_net::{
     app_protocol::*,
+    actor::SoS,
     broker::{ClientPeerId, BROKER},
     connection::NoiseFSM,
     server_broker::IServerBroker,
@@ -139,6 +140,11 @@ struct DetachableVerifier {
     verifier: Verifier,
 }
 
+/// A plugin served by a connected (headless) app.
+pub struct ActivePlugin {
+    peer: DirectPeerId, // peer-id of the app serving this plugin
+}
+
 pub struct ServerBrokerState {
     #[allow(dead_code)]
     overlays: HashMap<OverlayId, OverlayInfo>,
@@ -157,6 +163,20 @@ pub struct ServerBrokerState {
     // Accumulated stats per user while they are connected:
     #[cfg(feature = "usage-stats")]
     usage_stats_storage_bytes: HashMap<UserId, u64>,
+
+    /// Plugins that are connected and enabled, by plugin name.
+    /// Plugins are added when they register while enabled, or when the admin
+    /// enables them while connected (see app_plugin_activate). They are removed
+    /// when the admin moves them away from Enabled (see app_plugin_deactivate),
+    /// and lazily when ngd fails to forward them a message because they are no
+    /// longer connected.
+    /// There is at most one plugin in charge of any given service.
+    active_plugins: HashMap<String, ActivePlugin>,
+    /// Index of plugin names by peer. Updated in the same circumstances as the
+    /// above active_plugins.
+    /// In theory, a single plugin (peer-id) can be in charge of several services
+    /// (identified by name). This is not supported by this simple HashMap (TODO).
+    service_names: HashMap<DirectPeerId, String>,
 }
 
 pub struct ServerBroker {
@@ -188,6 +208,8 @@ impl ServerBroker {
                 wallet_exports_timestamp: BTreeMap::new(),
                 #[cfg(feature = "usage-stats")]
                 usage_stats_storage_bytes: HashMap::new(),
+                active_plugins: HashMap::new(),
+                service_names: HashMap::new(),
             }),
             master_key,
             path_users,
@@ -747,6 +769,131 @@ impl IServerBroker for ServerBroker {
         Ok(EmptyAppResponse(()))
     }
 
+    // Check that this peer-id is allowed to act as this plugin.
+    async fn app_plugin_register(
+        &self,
+        req: AppPluginRegister,
+        peer_id: DirectPeerId,
+    ) -> Result<AppPluginRegisterResp, ServerError> {
+        log_debug!("app_plugin_register: peer_id={:?}", &peer_id);
+        /* Is this peer enabled for req.service_name? */
+        let serv =
+            match self.service_plugin_get(&req.service_name, &peer_id) {
+                Ok(serv) => {
+                    assert!(serv.peer_id == peer_id); // Or service_plugin_get can't be trusted
+                    serv
+                },
+                Err(ProtocolError::NotFound) => {
+                    /* That's the first connection: register the plugin with a
+                     * Waiting status: */
+                    let serv = ServicePlugin {
+                        name: req.service_name.clone(),
+                        peer_id: peer_id,
+                        status: PluginStatus::Waiting,
+                    };
+                    self.service_plugin_put(&serv, true)?;
+                    serv
+                },
+                Err(e) => return Err(e.into()),
+            };
+        log_debug!("Service {} (peer {:?}) is {:?}", req.service_name, peer_id, serv.status);
+        if serv.status == PluginStatus::Enabled {
+            self.app_plugin_activate(&peer_id, &serv.name).await;
+        }
+        Ok(AppPluginRegisterResp::V0 { status: serv.status })
+    }
+
+    async fn app_plugin_activate(&self, peer_id: &DirectPeerId, service_name: &String) {
+        let mut state = self.state.write().await;
+        // Replace any previous registration, of this name or by this peer, mercilessly:
+        if let Some(old_name) = state.service_names.remove(peer_id) {
+            state.active_plugins.remove(&old_name);
+        }
+        if let Some(old_plugin) = state.active_plugins.remove(service_name) {
+            state.service_names.remove(&old_plugin.peer);
+        }
+        log_info!("Activating plugin {:?} for service {}", peer_id, service_name);
+        state.service_names.insert(*peer_id, service_name.clone());
+        state
+            .active_plugins
+            .insert(service_name.clone(), ActivePlugin { peer: *peer_id });
+    }
+
+    async fn app_plugin_deactivate(&self, peer_id: &DirectPeerId, service_name: &String) {
+        // Note: RwLock can't upgrade from read to write to take the write
+        // upfront, although it's rarely needed:
+        let mut state = self.state.write().await;
+        if let Some(name) = state.service_names.get(peer_id) {
+            // Waiting for 2024 edition for let-chaining:
+            if name == service_name {
+                log_info!("Deactivating plugin {:?} for service {}", peer_id, service_name);
+                state.service_names.remove(peer_id);
+                state.active_plugins.remove(service_name);
+            }
+        }
+    }
+
+    async fn service_name_of_peer(&self, peer: &DirectPeerId) -> Option<String> {
+        self.state.read().await.service_names.get(peer).cloned()
+    }
+
+    /* Forward a PluginRequest message to its final recipient, setting the
+     * caller field to the passed value. */
+    async fn plugin_request_forward(
+        &self,
+        mut req: PluginRequest,
+        caller: PluginCaller,
+    ) -> Result<PluginResponse, ServerError> {
+        // Only the broker can tell who the caller is:
+        if req.caller.is_some() {
+            return Err(ServerError::InvalidRequest);
+        }
+        req.caller = Some(caller);
+        let peer = self
+            .state
+            .read()
+            .await
+            .active_plugins
+            .get(&req.service_name)
+            .ok_or(ServerError::PluginNotFound)?
+            .peer;
+        let service_name = req.service_name.clone();
+        // Neither BROKER nor our state must stay locked while the plugin works on it:
+        let response = BROKER
+            .read()
+            .await
+            .prepare_request_to_app::<PluginRequest, PluginResponse>(
+                peer.slice(),
+                req,
+                PLUGIN_REQUEST_TIMEOUT,
+            )
+            .map_err(|e| match e {
+                NgError::ConnectionNotFound => ServerError::PluginNotFound,
+                e => e.into(),
+            });
+        let response = match response {
+            Ok(res) => res.await,
+            Err(e) => {
+                if e == ServerError::PluginNotFound {
+                    // The plugin is registered but not connected anymore
+                    let mut state = self.state.write().await;
+                    if state.service_names.get(&peer) == Some(&service_name) {
+                        state.service_names.remove(&peer);
+                        state.active_plugins.remove(&service_name);
+                    }
+                }
+                Err(e.into())
+            },
+        };
+        match response {
+            Ok(SoS::Single(res)) => Ok(res),
+            Ok(SoS::Stream(_)) => Err(ServerError::BrokerError),
+            Err(NgError::ServerError(e)) => Err(e),
+            Err(NgError::ProtocolError(ProtocolError::Timeout)) => Err(ServerError::PluginTimeout),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     fn get_repo_pin_status(
         &self,
         overlay: &OverlayId,
@@ -943,6 +1090,21 @@ impl IServerBroker for ServerBroker {
             self.usage_stats_storage_flush(user_id).await.unwrap_or(0u64);
         self.storage
             .usage_stats_update_for_user(user_id, net_stats, storage_bytes)
+            .map_err(Into::into)
+    }
+
+    fn service_plugin_list(&self) -> Result<Vec<ServicePlugin>, ProtocolError> {
+        self.storage.service_plugin_list()
+            .map_err(Into::into)
+    }
+    fn service_plugin_put(&self, serv: &ServicePlugin, for_create: bool) -> Result<(), ProtocolError> {
+        self.storage
+            .service_plugin_put(serv, for_create)
+            .map_err(Into::into)
+    }
+    fn service_plugin_get(&self, name: &String, peer_id: &DirectPeerId) -> Result<ng_net::types::ServicePlugin, ProtocolError> {
+        self.storage
+            .service_plugin_get(name, peer_id)
             .map_err(Into::into)
     }
 }

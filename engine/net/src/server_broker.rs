@@ -20,7 +20,9 @@ use ng_repo::block_storage::BlockStorage;
 use ng_repo::errors::*;
 use ng_repo::types::*;
 
-use crate::app_protocol::{AppRequest, AppSessionStart, AppSessionStartResponse, AppSessionStop};
+use crate::app_protocol::{
+    AppPluginRegister, AppPluginRegisterResp, AppRequest, AppSessionStart, AppSessionStartResponse, AppSessionStop,
+};
 use crate::broker::ClientPeerId;
 use crate::connection::NoiseFSM;
 use crate::types::*;
@@ -100,6 +102,33 @@ pub trait IServerBroker: Send + Sync {
         remote_peer_id: &DirectPeerId,
     ) -> Result<EmptyAppResponse, ServerError>;
 
+    async fn app_plugin_register(
+        &self,
+        req: AppPluginRegister,
+        remote_peer_id: DirectPeerId,
+    ) -> Result<AppPluginRegisterResp, ServerError>;
+
+    async fn app_plugin_activate(
+        &self,
+        peer_id: &DirectPeerId,
+        service_name: &String,
+    );
+    async fn app_plugin_deactivate(
+        &self,
+        peer_id: &DirectPeerId,
+        service_name: &String,
+    );
+
+    /// The name of the plugin registered by the app connected as `peer`, if any.
+    async fn service_name_of_peer(&self, peer: &DirectPeerId) -> Option<String>;
+
+    /// Forwards `req` to the named plugin, on behalf of `caller`, and returns its response.
+    async fn plugin_request_forward(
+        &self,
+        req: PluginRequest,
+        caller: PluginCaller,
+    ) -> Result<PluginResponse, ServerError>;
+
     fn next_seq_for_peer(&self, peer: &PeerId, seq: u64) -> Result<(), ServerError>;
 
     fn get_repo_pin_status(
@@ -173,5 +202,7 @@ pub trait IServerBroker: Send + Sync {
         net_stats: &NetStats,
     ) -> Result<(), ServerError>;
 
-    fn modify_user(&self, user_id: PubKey, admin: bool) -> Result<(), ProtocolError>;
+    fn service_plugin_list(&self) -> Result<Vec<ServicePlugin>, ProtocolError>;
+    fn service_plugin_put(&self, serv: &ServicePlugin, for_create: bool) -> Result<(), ProtocolError>;
+    fn service_plugin_get(&self, name: &String, peer_id: &DirectPeerId) -> Result<ServicePlugin, ProtocolError>;
 }

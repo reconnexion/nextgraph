@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashSet;
+use std::future::Future;
 
 use async_std::stream::StreamExt;
 #[cfg(not(target_arch = "wasm32"))]
@@ -22,6 +23,7 @@ use async_std::sync::{Arc, RwLock};
 use either::Either;
 use futures::channel::mpsc;
 use futures::channel::mpsc::UnboundedSender;
+use futures::channel::oneshot;
 use futures::SinkExt;
 use once_cell::sync::Lazy;
 
@@ -131,6 +133,19 @@ pub enum LocalBrokerMessage {
     },
 }
 
+/// What the broker sends to a plugin's handler:
+/// Either a request forwarded from another peer or a notification.
+#[derive(Debug)]
+pub enum PluginIncoming {
+    /// A request needs a oneshot to write the answer into.
+    Request(PluginRequest, oneshot::Sender<Result<PluginResponse, ServerError>>),
+    Notify(PluginNotify),
+}
+
+/// We don't want to deal with JS here so a handler is just a thing that
+/// receives many `PluginIncoming`s:
+pub type PluginHandler = mpsc::UnboundedSender<PluginIncoming>;
+
 pub static BROKER: Lazy<Arc<RwLock<Broker>>> = Lazy::new(|| Arc::new(RwLock::new(Broker::new())));
 
 pub struct Broker {
@@ -148,6 +163,10 @@ pub struct Broker {
 
     //local_broker: Option<Box<dyn ILocalBroker + Send + Sync + 'a>>,
     local_broker: Option<UnboundedSender<LocalBrokerMessage>>,
+
+    /// Function actually answering `PluginRequest` and `PluginNotify` messages.
+    /// Only ever set on plugins (headless app clients).
+    plugin_handler: Option<PluginHandler>,
 
     #[cfg(not(target_arch = "wasm32"))]
     listeners: HashMap<String, ListenerInfo>,
@@ -262,6 +281,14 @@ impl Broker {
             .as_ref()
             .ok_or(ProtocolError::NoLocalBrokerFound)?
             .clone())
+    }
+
+    pub(crate) fn get_plugin_handler(&self) -> Option<PluginHandler> {
+        self.plugin_handler.clone()
+    }
+
+    pub fn set_plugin_handler(&mut self, handler: PluginHandler) {
+        self.plugin_handler = Some(handler);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -514,6 +541,7 @@ impl Broker {
             closing: false,
             server_broker: None,
             local_broker: None,
+            plugin_handler: None,
 
             #[cfg(not(target_arch = "wasm32"))]
             listeners: HashMap::new(),
@@ -775,6 +803,15 @@ impl Broker {
         Ok(())
     }
 
+    // Tells if a client is connected (assuming userId is None)
+    pub(crate) fn is_connected(&self, remote_peer_id: &X25519PubKey) -> bool {
+        if let Some(info) = self.peers.get(&(None, Some(*remote_peer_id))) {
+            !matches!(info.connected, PeerConnection::NONE)
+        } else {
+            false
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) async fn attach_and_authorize_app(
         &mut self,
@@ -815,6 +852,7 @@ impl Broker {
             last_peer_advert: None,
             connected,
         };
+        log_debug!("attach_and_authorize_app: adding peer {:?}", &remote_peer_id);
         self.peers.insert((None, Some(remote_peer_id)), bpi);
 
         Ok(())
@@ -901,6 +939,7 @@ impl Broker {
             last_peer_advert: None,
             connected,
         };
+        log_debug!("attach_and_authorize_peer_id: adding peer {:?}", &remote_peer_id);
         self.peers.insert((None, Some(remote_peer_id)), bpi);
 
         Ok(())
@@ -1003,6 +1042,7 @@ impl Broker {
             }),
         };
 
+        log_debug!("connect_local: add user {:?}", user);
         self.peers.insert((Some(user), None), bpi);
         Ok(())
     }
@@ -1074,6 +1114,7 @@ impl Broker {
             connected,
         };
 
+        log_debug!("connect: add peer {:?}", remote_peer_id_dh);
         self.peers
             .insert((config.get_user(), Some(*remote_peer_id_dh.slice())), bpi);
 
@@ -1166,13 +1207,50 @@ impl Broker {
         remote_peer_id: &Option<DirectPeerId>, // None means local
         msg: A,
     ) -> Result<SoS<B>, NgError> {
+        self.prepare_request(user, remote_peer_id, msg)?.await
+    }
+
+    /// Like `request`, but the returned future does not borrow the broker, so it can be
+    /// awaited after releasing the lock on BROKER.
+    pub fn prepare_request<
+        A: Into<ProtocolMessage> + std::fmt::Debug + Sync + Send + 'static,
+        B: TryFrom<ProtocolMessage, Error = ProtocolError> + std::fmt::Debug + Sync + Send + 'static,
+    >(
+        &self,
+        user: &Option<UserId>,
+        remote_peer_id: &Option<DirectPeerId>, // None means local
+        msg: A,
+    ) -> Result<impl Future<Output = Result<SoS<B>, NgError>> + 'static, NgError> {
         let bpi = self
             .peers
             .get(&(*user, remote_peer_id.map(|rpi| rpi.to_dh_slice())))
             .ok_or(NgError::ConnectionNotFound)?;
         match &bpi.connected {
-            PeerConnection::Client(cnx) => cnx.request(msg).await,
-            PeerConnection::Local(lt) => lt.client_cnx.request(msg).await,
+            PeerConnection::Client(cnx) => cnx.prepare_request(msg),
+            PeerConnection::Local(lt) => lt.client_cnx.prepare_request(msg),
+            _ => Err(NgError::BrokerError),
+        }
+    }
+
+    /// Server side: prepares a request to the app connected as `peer` (an app connection).
+    /// The returned future does not borrow the broker, so it can be awaited after
+    /// releasing the lock on BROKER.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn prepare_request_to_app<
+        A: Into<ProtocolMessage> + std::fmt::Debug + Sync + Send + 'static,
+        B: TryFrom<ProtocolMessage, Error = ProtocolError> + std::fmt::Debug + Sync + Send + 'static,
+    >(
+        &self,
+        peer: &X25519PrivKey,
+        msg: A,
+        timeout: std::time::Duration,
+    ) -> Result<impl Future<Output = Result<SoS<B>, NgError>> + 'static, NgError> {
+        let bpi = self
+            .peers
+            .get(&(None, Some(*peer)))
+            .ok_or(NgError::ConnectionNotFound)?;
+        match &bpi.connected {
+            PeerConnection::Client(cnx) => cnx.prepare_request_with_timeout(msg, timeout),
             _ => Err(NgError::BrokerError),
         }
     }

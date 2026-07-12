@@ -13,6 +13,7 @@ use core::fmt;
 use std::cmp::max;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::future::Future;
 #[cfg(all(not(target_family = "wasm"), not(docsrs)))]
 use std::fs::create_dir_all;
 #[cfg(all(not(target_family = "wasm"), not(docsrs)))]
@@ -1105,14 +1106,24 @@ impl Verifier {
         &self,
         msg: A,
     ) -> Result<SoS<B>, NgError> {
+        self.prepare_client_request(msg).await?.await
+    }
+
+    /// Like `client_request`, but the returned future does not keep BROKER locked.
+    pub async fn prepare_client_request<
+        A: Into<ProtocolMessage> + std::fmt::Debug + Sync + Send + 'static,
+        B: TryFrom<ProtocolMessage, Error = ProtocolError> + std::fmt::Debug + Sync + Send + 'static,
+    >(
+        &self,
+        msg: A,
+    ) -> Result<impl Future<Output = Result<SoS<B>, NgError>> + 'static, NgError> {
         if self.connected_broker.is_some() {
             let connected_broker = self.connected_broker.clone();
-            let broker = BROKER.read().await;
             let user = self.user_id().clone();
-
-            broker
-                .request::<A, B>(&Some(user), &connected_broker.into(), msg)
+            BROKER
+                .read()
                 .await
+                .prepare_request::<A, B>(&Some(user), &connected_broker.into(), msg)
         } else {
             Err(NgError::NotConnected)
         }
