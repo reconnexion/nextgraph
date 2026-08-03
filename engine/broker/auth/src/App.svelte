@@ -348,6 +348,7 @@
           };
           
           window.addEventListener("message",ready_handler);
+          iframe.allow = 'local-network-access; geolocation';
           iframe.src = `${iframe_config.src}${encoded_origin}`;
         } else if (logged_in) {
           // we redirect to the unauthenticated origin

@@ -40,6 +40,7 @@ window.addEventListener("message", async (event)=>{
       wallet_port = port;
 
       let iframe = window.document.getElementById("nextgraph-app-iframe");
+      iframe.allow = 'local-network-access; geolocation';
       iframe.src = web_redirect;
     }
   } else if (event.origin === web_origin) {
