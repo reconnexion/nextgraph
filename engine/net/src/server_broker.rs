@@ -64,7 +64,8 @@ pub trait IServerBroker: Send + Sync {
     ) -> Result<(), ProtocolError>;
     fn add_user(&self, user_id: PubKey, is_admin: bool) -> Result<(), ProtocolError>;
     fn del_user(&self, user_id: PubKey) -> Result<(), ProtocolError>;
-    fn list_users(&self, admins: bool) -> Result<Vec<PubKey>, ProtocolError>;
+    fn modify_user(&self, user_id: PubKey, admin: bool) -> Result<(), ProtocolError>;
+    fn list_users(&self, admins: Option<bool>, hydrated: bool, after_user: Option<UserId>, limit: Option<u32>) -> Result<Vec<ListedUser>, ProtocolError>;
     fn list_invitations(
         &self,
         admin: bool,

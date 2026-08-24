@@ -59,6 +59,21 @@ impl<'a> RocksdbTransaction<'a> {
 }
 
 impl<'a> ReadTransaction for RocksdbTransaction<'a> {
+    fn iterator_from(
+        &self,
+        start_key: &[u8],
+        family: &Option<String>,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>), StorageError>> + '_>,
+        StorageError,
+    > {
+        let iter = self.get_iterator(start_key, family)?;
+        Ok(Box::new(iter.map(|res| match res {
+            Ok((key, value)) => Ok((key.into_vec(), value.into_vec())),
+            Err(_e) => Err(StorageError::BackendError),
+        })))
+    }
+
     fn get_all_keys_and_values(
         &self,
         prefix: u8,
@@ -368,6 +383,21 @@ fn compare<T: Ord>(a: &[T], b: &[T]) -> std::cmp::Ordering {
 }
 
 impl ReadTransaction for RocksDbKCVStorage {
+    fn iterator_from(
+        &self,
+        start_key: &[u8],
+        family: &Option<String>,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>), StorageError>> + '_>,
+        StorageError,
+    > {
+        let iter = self.get_iterator(start_key, family)?;
+        Ok(Box::new(iter.map(|res| match res {
+            Ok((key, value)) => Ok((key.into_vec(), value.into_vec())),
+            Err(_e) => Err(StorageError::BackendError),
+        })))
+    }
+
     /// returns a list of (key,value) that are in the range specified in the request
     fn get_all_keys_and_values(
         &self,

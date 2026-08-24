@@ -293,7 +293,8 @@ async fn main_inner() -> Result<(), NgcliError> {
                     .subcommand(
                         Command::new("list-users")
                             .about("list all users registered in the broker")
-                            .arg(arg!(-a --admin "only lists admin users. otherwise, lists only non admin users").required(false)))
+                            .arg(arg!(-a --admin <BOOL> "only lists admin (true) or non-admin (false) users").required(false).value_parser(["true", "false"]))
+                            .arg(arg!(--hydrated "display more information about users that just public keys").required(false)))
                     .subcommand(
                         Command::new("add-invitation")
                             .about("add an invitation to register on the server")
@@ -849,15 +850,30 @@ async fn main_inner() -> Result<(), NgcliError> {
             }
             Some(("list-users", sub2_matches)) => {
                 log_debug!("list-users");
-                let admins = sub2_matches.get_flag("admin");
-                let res = do_admin_call(keys[1], config_v0, ListUsers::V0(ListUsersV0 { admins }))
+                let admins =
+                    match sub2_matches.get_one::<String>("admin") {
+                        None => None,
+                        Some(s) => Some(
+                            s.as_str().parse()
+                            .map_err(|_| NgcliError::OtherConfigErrorStr("supplied admin is invalid"))?),
+                    };
+                let hydrated = sub2_matches.get_flag("hydrated");
+                let res = do_admin_call(
+                    keys[1],
+                    config_v0,
+                    ListUsers::V0(ListUsersV0 {
+                        admins,
+                        hydrated,
+                        /* TODO */
+                        after_user: None,
+                        limit: None,
+                    }))
                     .await?;
                 match &res {
                     AdminResponseContentV0::Users(list) => {
                         println!(
-                            "Found {} {}users",
+                            "Found {} users",
                             list.len(),
-                            if admins { "admin " } else { "" }
                         );
                         for user in list {
                             println!("{user}");

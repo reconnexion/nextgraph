@@ -2950,7 +2950,7 @@ impl From<AdminRequest> for ProtocolMessage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AdminResponseContentV0 {
     EmptyResponse,
-    Users(Vec<PubKey>),
+    Users(Vec<ListedUser>),
     Invitations(Vec<(InvitationCode, u32, Option<String>)>),
     Invitation(Invitation),
     UserId(UserId),
@@ -3009,8 +3009,8 @@ impl From<Result<PubKey, ProtocolError>> for AdminResponseV0 {
     }
 }
 
-impl From<Result<Vec<PubKey>, ProtocolError>> for AdminResponseV0 {
-    fn from(res: Result<Vec<PubKey>, ProtocolError>) -> AdminResponseV0 {
+impl From<Result<Vec<ListedUser>, ProtocolError>> for AdminResponseV0 {
+    fn from(res: Result<Vec<ListedUser>, ProtocolError>) -> AdminResponseV0 {
         match res {
             Err(e) => AdminResponseV0 {
                 id: 0,
@@ -3095,6 +3095,125 @@ impl AdminResponse {
     }
 }
 
+/// Answers to the admin request for list_users are objects or type ListedUser:
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HydratedListedUserV0 {
+    pub id: UserId,
+    pub is_admin: bool,
+    pub net_stats: NetStats,
+    pub storage_stats: StorageStats,
+    pub first_seen: i64,
+    pub last_seen: i64,
+}
+
+impl fmt::Display for HydratedListedUserV0 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{} {}:\n{}{}First seen: {}, last seen: {}",
+            (if self.is_admin { "Admin" } else { "User" }),
+            self.id,
+            self.net_stats,
+            self.storage_stats,
+            self.first_seen,
+            self.last_seen)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ListedUser {
+    Id(UserId),
+    HydratedV0(HydratedListedUserV0),
+}
+
+impl fmt::Display for ListedUser {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Id(id) => write!(f, "{}", id),
+            Self::HydratedV0(h) => write!(f, "{}", h),
+        }
+    }
+}
+
+impl ListedUser {
+    pub fn id(&self) -> &UserId {
+        match self {
+            Self::Id(id) => return id,
+            Self::HydratedV0(h) => return &h.id,
+        }
+    }
+
+    pub fn is_admin(&self) -> Option<bool> {
+        match self {
+            Self::Id(_) => return None,
+            Self::HydratedV0(h) => return Some(h.is_admin),
+        }
+    }
+
+    pub fn new_id(id: UserId) -> Self {
+        return Self::Id(id)
+    }
+
+    pub fn new_hydrated(id: UserId) -> Self {
+        return Self::HydratedV0(HydratedListedUserV0 {
+            id,
+            is_admin: false,
+            net_stats: NetStats::new(),
+            storage_stats: StorageStats::new(),
+            first_seen: 0i64,
+            last_seen: 0i64,
+        })
+    }
+
+    pub fn to_hydrated(self) -> Self {
+        match self {
+            Self::Id(id) => return Self::new_hydrated(id),
+            Self::HydratedV0(_) => return self,
+        }
+    }
+
+    pub fn to_id(self) -> Self {
+        match self {
+            Self::Id(_) => return self,
+            Self::HydratedV0(h) => return Self::new_id(h.id),
+        }
+    }
+
+    pub fn set_admin(&mut self, is_admin: bool) {
+        match self {
+            Self::Id(_) => (),
+            Self::HydratedV0(h) => h.is_admin = is_admin,
+        }
+    }
+
+    pub fn set_net_stats(&mut self, net_stats: NetStats) {
+        match self {
+            Self::Id(_) => (),
+            Self::HydratedV0(h) => h.net_stats = net_stats,
+        }
+    }
+
+    pub fn set_storage_stats(&mut self, storage_stats: StorageStats) {
+        match self {
+            Self::Id(_) => (),
+            Self::HydratedV0(h) => h.storage_stats = storage_stats,
+        }
+    }
+
+    pub fn set_first_seen(&mut self, first_seen: i64) {
+        match self {
+            Self::Id(_) => (),
+            Self::HydratedV0(h) => h.first_seen = first_seen,
+        }
+    }
+
+    pub fn set_last_seen(&mut self, last_seen: i64) {
+        match self {
+            Self::Id(_) => (),
+            Self::HydratedV0(h) => h.last_seen = last_seen,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// usage statistics for a given user
 pub struct UsageStats {
@@ -3108,6 +3227,12 @@ pub struct UsageStats {
 pub struct NetStats {
     pub ingress: u64,
     pub egress: u64,
+}
+
+impl fmt::Display for NetStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Net: in: {}, out: {}", self.ingress, self.egress)
+    }
 }
 
 impl NetStats {
@@ -3127,6 +3252,12 @@ impl NetStats {
 pub struct StorageStats {
     pub current: u64,
     pub max: u64,
+}
+
+impl fmt::Display for StorageStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Storage: {} (max: {})", self.current, self.max)
+    }
 }
 
 impl StorageStats {

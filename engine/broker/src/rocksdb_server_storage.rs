@@ -245,9 +245,14 @@ impl RocksDbServerStorage {
         acc.modify(set_admin)?;
         Ok(())
     }
-    pub(crate) fn list_users(&self, admins: bool) -> Result<Vec<PubKey>, ProtocolError> {
-        log_debug!("list_users that are admin == {admins}");
-        Ok(Account::get_all_users(admins, &self.accounts_storage)?)
+    pub(crate) fn list_users(&self, admins: Option<bool>, hydrated: bool, after_user: Option<UserId>, limit: Option<u32>) -> Result<Vec<ListedUser>, ProtocolError> {
+        log_debug!("list_users: {}",
+                match admins {
+                    None => "all",
+                    Some(true) => "only admins",
+                    Some(false) => "excluding admins",
+                });
+        Ok(Account::get_all_users(&self.accounts_storage, admins, hydrated, after_user, limit)?)
     }
     pub(crate) fn list_invitations(
         &self,

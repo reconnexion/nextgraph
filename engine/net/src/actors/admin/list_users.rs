@@ -15,6 +15,7 @@ use async_std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use ng_repo::errors::*;
+use ng_repo::types::UserId;
 
 use super::super::StartProtocol;
 
@@ -26,8 +27,14 @@ use crate::{actor::*, types::ProtocolMessage};
 /// List users registered on this broker
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ListUsersV0 {
-    /// should list only the admins. if false, admin users will be excluded
-    pub admins: bool,
+    /// Filter: List only the admins, non-admins, or everyone
+    pub admins: Option<bool>,
+    /// Include user extra information
+    pub hydrated: bool,
+    /// Users are always returned ordered by key, which makes for an easy cursor
+    /// made of last received UserId (if any) and limit:
+    pub after_user: Option<UserId>,
+    pub limit: Option<u32>,
 }
 
 /// List users registered on this broker
@@ -37,9 +44,24 @@ pub enum ListUsers {
 }
 
 impl ListUsers {
-    pub fn admins(&self) -> bool {
+    pub fn admins(&self) -> Option<bool> {
         match self {
             Self::V0(o) => o.admins,
+        }
+    }
+    pub fn hydrated(&self) -> bool {
+        match self {
+            Self::V0(o) => o.hydrated,
+        }
+    }
+    pub fn after_user(&self) -> Option<UserId> {
+        match self {
+            Self::V0(o) => o.after_user,
+        }
+    }
+    pub fn limit(&self) -> Option<u32> {
+        match self {
+            Self::V0(o) => o.limit,
         }
     }
     pub fn get_actor(&self) -> Box<dyn EActor> {
@@ -86,7 +108,13 @@ impl EActor for Actor<'_, ListUsers, AdminResponse> {
     ) -> Result<(), ProtocolError> {
         let req = ListUsers::try_from(msg)?;
         let sb = { BROKER.read().await.get_server_broker()? };
-        let res = { sb.read().await.list_users(req.admins()) };
+        let res = {
+            sb.read().await.list_users(
+                req.admins(),
+                req.hydrated(),
+                req.after_user(),
+                req.limit(),
+            ) };
 
         let response: AdminResponseV0 = res.into();
         fsm.lock().await.send(response.into()).await?;

@@ -3296,9 +3296,13 @@ pub async fn admin_modify_user(
 #[doc(hidden)]
 pub async fn admin_list_users(
     session_id: u64,
-    admins: bool,
-) -> Result<Vec<PubKey>, ProtocolError> {
-    let res = do_admin_call(session_id, ListUsers::V0(ListUsersV0 { admins }))
+    admins: Option<bool>,
+    hydrated: bool,
+    after_user: Option<UserId>,
+    limit: Option<u32>,
+) -> Result<Vec<ListedUser>, ProtocolError> {
+    let res = do_admin_call(session_id, ListUsers::V0(ListUsersV0 {
+                admins, hydrated, after_user, limit }))
     .await?;
 
     match res {

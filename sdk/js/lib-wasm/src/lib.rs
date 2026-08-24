@@ -848,10 +848,18 @@ pub async fn admin_modify_user(session_id: JsValue, user_to_modify: JsValue, set
 }
 
 #[wasm_bindgen]
-pub async fn admin_list_users(session_id: JsValue, admins: bool) -> Result<JsValue, String> {
+pub async fn admin_list_users(
+    session_id: JsValue,
+    admins: Option<bool>,
+    hydrated: bool,
+    after_user: JsValue,
+    limit: Option<u32>,
+) -> Result<JsValue, String> {
     let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id.clone())
         .map_err(|_| "Deserialization error of session_id")?;
-    let users = nextgraph::local_broker::admin_list_users(session_id, admins)
+    let after_user = serde_wasm_bindgen::from_value::<Option<UserId>>(after_user)
+        .map_err(|_| "Deserialization error of after_user")?;
+    let users = nextgraph::local_broker::admin_list_users(session_id, admins, hydrated, after_user, limit)
     .await
     .map_err(|e: ProtocolError| e.to_string())?;
     Ok(serde_wasm_bindgen::to_value(&users).unwrap())

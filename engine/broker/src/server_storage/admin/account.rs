@@ -111,24 +111,100 @@ impl<'a> Account<'a> {
 
     #[allow(deprecated)]
     pub fn get_all_users(
-        admins: bool,
         storage: &'a dyn KCVStorage,
-    ) -> Result<Vec<UserId>, StorageError> {
-        let size = to_vec(&UserId::nil())?.len();
+        admins: Option<bool>,
+        hydrated: bool,
+        after_user: Option<UserId>,
+        limit: Option<u32>,
+    ) -> Result<Vec<ListedUser>, StorageError> {
+        let prefix = Self::PREFIX_ACCOUNT;
+        let key_size = to_vec(&UserId::nil())?.len();
+        let start_id =
+            match after_user {
+                None => vec![0u8; key_size],
+                Some(user_id) => to_vec(&user_id).unwrap(),
+            };
+        let start_key = [vec![prefix], start_id].concat();
+        let mut iter = storage.iterator_from(&start_key, &None)?;
         let mut res = Vec::new();
-        for user in
-            storage.get_all_keys_and_values(Self::PREFIX_ACCOUNT, size, vec![], Some(Self::ADMIN), &None)?
-        {
-            // Because of the slice below:
-            // FIXME: get_all_keys_and_values should return opt prefix, key and opt suffix
-            assert!(user.0.len() >= 2, "Account key must have at least 2 chars, got {}", user.0.len());
-            let admin: bool = from_slice(&user.1)?;
-            if admin == admins {
-                let id: UserId = from_slice(&user.0[1..user.0.len()-1])?;
-                res.push(id);
+        let mut cur_user: Option<ListedUser> = None;
+        loop {
+            match iter.next() {
+                Some(Ok(kv)) => {
+                    /* Skip after_user: */
+                    let skip =
+                        after_user.is_some() &&
+                        kv.0.len() >= start_key.len() &&
+                        &kv.0[..start_key.len()] == &start_key;
+                    /* The iterator is unbounded: stop as soon as we leave the
+                     * accounts. Also ignore any key that's not prefix+id+suffix. */
+                    if kv.0.first() != Some(&prefix) {
+                        break
+                    }
+                    if kv.0.len() != key_size + 2 {
+                        log_debug!("Ignoring key of unexpected length {:?}", &kv.0);
+                        continue
+                    }
+                    if skip {
+                        log_debug!("Skipping over key {:?}", &kv.0);
+                    } else {
+                        let id: UserId = from_slice(&kv.0[1..kv.0.len()-1])?;
+                        /* Maybe flush cur_user: */
+                        let reset_user =
+                            match &cur_user {
+                                Some(user) => *user.id() != id,
+                                None => true,
+                            };
+                        if reset_user {
+                            if let Some(user) = cur_user.take() {
+                                log_debug!("Flushing key {:?}", user.id());
+                                res.push(user);
+                                if matches!(limit, Some(l) if res.len() >= l as usize) {
+                                    break
+                                }
+                            }
+                            cur_user = Some(ListedUser::new_hydrated(id));
+                        }
+                        // At that point we do have a user for sure:
+                        let user = cur_user.as_mut().unwrap();
+                        // Now pay attention to the actual suffix to hydrate cur_user
+                        let suffix = kv.0[kv.0.len() - 1];
+                        log_debug!("Got suffix {suffix}");
+                        match suffix {
+                            Self::ADMIN =>
+                                user.set_admin(from_slice(&kv.1)?),
+                            Self::STATS_NET =>
+                                user.set_net_stats(from_slice(&kv.1)?),
+                            Self::STATS_STORAGE =>
+                                user.set_storage_stats(from_slice(&kv.1)?),
+                            Self::STATS_FIRST_SEEN =>
+                                user.set_first_seen(from_slice(&kv.1)?),
+                            Self::STATS_LAST_SEEN =>
+                                user.set_last_seen(from_slice(&kv.1)?),
+                            _ => (),
+                        }
+                    }
+                },
+                Some(Err(e)) => {
+                    log_err!("Account:get_all_users: Cannot iterate over keys: {}", e);
+                    return Err(StorageError::BackendError)
+                },
+                None => break,
             }
         }
-        Ok(res)
+        /* Flush the last user, unless we broke out on the limit (in which case
+         * cur_user was already taken). */
+        if let Some(user) = cur_user.take() {
+            log_debug!("Flushing last key {:?}", user.id());
+            res.push(user);
+        }
+        Ok(res.into_iter().filter_map(|x| {
+            if admins == None || admins == x.is_admin() {
+                Some(if hydrated { x } else { x.to_id() })
+            } else {
+                None
+            }
+        }).collect())
     }
 
     pub fn has_users(storage: &'a dyn KCVStorage) -> Result<bool, StorageError> {

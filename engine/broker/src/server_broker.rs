@@ -490,8 +490,8 @@ impl IServerBroker for ServerBroker {
     fn modify_user(&self, user_id: PubKey, set_admin: bool) -> Result<(), ProtocolError> {
         self.storage.modify_user(user_id, set_admin)
     }
-    fn list_users(&self, admins: bool) -> Result<Vec<PubKey>, ProtocolError> {
-        self.storage.list_users(admins)
+    fn list_users(&self, admins: Option<bool>, hydrated: bool, after_user: Option<UserId>, limit: Option<u32>) -> Result<Vec<ListedUser>, ProtocolError> {
+        self.storage.list_users(admins, hydrated, after_user, limit)
     }
     fn list_invitations(
         &self,

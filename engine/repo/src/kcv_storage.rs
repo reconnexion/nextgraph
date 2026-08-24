@@ -1049,6 +1049,17 @@ pub trait ReadTransaction {
         family: &Option<String>,
     ) -> Result<Vec<Vec<u8>>, StorageError>;
 
+    /// Returns an iterator over all the (key, value) pairs of the store starting at
+    /// `start_key` (included).
+    fn iterator_from(
+        &self,
+        start_key: &[u8],
+        family: &Option<String>,
+    ) -> Result<
+        Box<dyn Iterator<Item = Result<(Vec<u8>, Vec<u8>), StorageError>> + '_>,
+        StorageError,
+    >;
+
     fn get_all_properties_of_key(
         &self,
         prefix: u8,
