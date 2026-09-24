@@ -16,6 +16,9 @@ rust-version.workspace = true
 [badges]
 maintenance = { status = "actively-developed" }
 
+[features]
+usage-stats = []
+
 [dependencies]
 serde = { version = "1.0", features = ["derive","rc"] }
 serde_bare = "0.5.0"

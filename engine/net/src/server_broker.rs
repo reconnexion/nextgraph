@@ -160,10 +160,12 @@ pub trait IServerBroker: Send + Sync {
         known_commits: &Option<BloomFilter>,
     ) -> Result<Vec<TopicSyncRes>, ServerError>;
 
+    #[cfg(feature = "usage-stats")]
     async fn usage_stats_storage_bytes_add(&self, user_id: &UserId, bytes: usize);
 
     fn usage_stats(&self, user_id: &UserId) -> Result<UsageStats, ProtocolError>;
 
+    #[cfg(feature = "usage-stats")]
     async fn usage_stats_update_for_user(
         &self,
         user_id: &UserId,

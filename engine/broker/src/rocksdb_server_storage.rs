@@ -791,6 +791,7 @@ impl RocksDbServerStorage {
         Ok(stats)
     }
 
+    #[cfg(feature = "usage-stats")]
     pub(crate) fn usage_stats_update_for_user(
         &self,
         user_id: &UserId,

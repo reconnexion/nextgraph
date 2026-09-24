@@ -155,6 +155,7 @@ pub struct ServerBrokerState {
     wallet_exports_timestamp: BTreeMap<SystemTime, SymKey>,
 
     // Accumulated stats per user while they are connected:
+    #[cfg(feature = "usage-stats")]
     usage_stats_storage_bytes: HashMap<UserId, u64>,
 }
 
@@ -185,6 +186,7 @@ impl ServerBroker {
                 wallet_rendezvous: HashMap::new(),
                 wallet_exports: HashMap::new(),
                 wallet_exports_timestamp: BTreeMap::new(),
+                #[cfg(feature = "usage-stats")]
                 usage_stats_storage_bytes: HashMap::new(),
             }),
             master_key,
@@ -294,6 +296,7 @@ impl ServerBroker {
     }
 
     // Return the current write counter for that user and stop tracking it
+    #[cfg(feature = "usage-stats")]
     pub async fn usage_stats_storage_flush(&self, user_id: &UserId) -> Option<u64> {
         //log_debug!("usage_stats_storage_flush: flushing storage stats for {}", &user_id);
         let mut lock = self.state.write().await;
@@ -919,12 +922,14 @@ impl IServerBroker for ServerBroker {
     }
 
     // Add this many bytes to the write counter of that user
+    #[cfg(feature = "usage-stats")]
     async fn usage_stats_storage_bytes_add(&self, user_id: &UserId, bytes: usize) {
         let mut lock = self.state.write().await;
         let cur = lock.usage_stats_storage_bytes.entry(*user_id).or_insert(0u64);
         *cur += bytes as u64
     }
 
+    #[cfg(feature = "usage-stats")]
     async fn usage_stats_update_for_user(
         &self,
         user_id: &UserId,

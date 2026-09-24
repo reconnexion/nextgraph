@@ -111,6 +111,7 @@ impl EActor for Actor<'_, PublishEvent, ()> {
                         .await;
                 }
                 //log_debug!("events: adding {} bytes of storage", storage_bytes);
+                #[cfg(feature = "usage-stats")]
                 broker.read().await
                     .usage_stats_storage_bytes_add(&user_id, storage_size).await;
                 let finalres: Result<(), ServerError> = Ok(());

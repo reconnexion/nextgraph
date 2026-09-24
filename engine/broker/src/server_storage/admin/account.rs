@@ -378,6 +378,7 @@ impl<'a> Account<'a> {
         Ok(self.usage_stats_net_unwrap(ser)?)
     }
 
+    #[cfg(feature = "usage-stats")]
     pub fn usage_stats_net_add(&self, stats: &NetStats) -> Result<(), StorageError> {
         let id = to_vec(&self.id)?;
         self.storage.write_transaction(&mut |tx| {
@@ -409,6 +410,7 @@ impl<'a> Account<'a> {
     }
 
     // Add this amount of bytes to the stored storage stats for this account
+    #[cfg(feature = "usage-stats")]
     pub fn usage_stats_storage_add(&self, bytes: u64) -> Result<(), StorageError> {
         if bytes > 0u64 {
             let id = to_vec(&self.id)?;
@@ -451,6 +453,7 @@ impl<'a> Account<'a> {
         Ok(self.usage_stats_unwrap(ser, 0i64)?)
     }
 
+    #[cfg(feature = "usage-stats")]
     pub fn usage_stats_touch(&self) -> Result<(), StorageError> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -490,6 +493,7 @@ impl<'a> Account<'a> {
         })
     }
 
+    #[cfg(feature = "usage-stats")]
     pub fn usage_stats_update(
         &self,
         net_stats: &NetStats,

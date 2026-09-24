@@ -73,6 +73,7 @@ impl EActor for Actor<'_, BlocksPut, ()> {
         }
         //log_debug!("blocks_put: adding {} bytes of storage", storage_bytes);
         let mut fsm = fsm.lock().await;
+        #[cfg(feature = "usage-stats")]
         match fsm.user_id() {
             Ok(user_id) =>
                 sb.read().await

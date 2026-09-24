@@ -695,6 +695,8 @@ impl Broker {
                             .remove_anonymous(remote_bind_address, local_bind_address);
                     }
                 }
+                // Save network stats
+                #[cfg(feature = "usage-stats")]
                 if let Some(fsm) = fsm {
                     let fsm = fsm.lock().await;
                     match fsm.user_id() {
