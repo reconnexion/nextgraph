@@ -52,6 +52,9 @@ impl<'a> Account<'a> {
     //const USER_KEYS: u8 = b'k';
     // accounts' properties suffixes
     const ADMIN: u8 = b'a'; // value = boolean (admin or not)
+    /* Users created by broker::server_broker::create_user are managed by the
+     * broker, which stores their full creds in this key. In practice, this is
+     * only used by headless mode local brokers. */
     const CREDENTIALS: u8 = b'c';
     const STATS_NET: u8 = b'n';  // value = NetStats
     const STATS_STORAGE: u8 = b's';  // value = StorageStats

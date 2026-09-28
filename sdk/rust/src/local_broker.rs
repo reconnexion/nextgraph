@@ -3140,6 +3140,12 @@ pub async fn take_disconnections_receiver() -> Result<Receiver<String>, NgError>
         .ok_or(NgError::BrokerError)
 }
 
+/* Headless-mode callers must pass HEADLESS_ADMIN_SESSION_ID in lieu of a normal
+ * admin session_id. Even for admin_create_user, which is only ever called in
+ * headless-mode for now.
+ * Headless session_ids start at 1, so 0 is a good marker. */
+pub const HEADLESS_ADMIN_SESSION_ID: u64 = 0;
+
 async fn do_admin_call<
     A: Into<ProtocolMessage> + Into<AdminRequestContentV0> + std::fmt::Debug + Sync + Send + 'static,
 >(
@@ -3160,41 +3166,58 @@ async fn do_admin_call<
             },
             Some(Ok(b)) => b.read().await,
         };
-        let user_id = broker.get_session(session_id)?.config.user_id();
-        let (wallet, session) = broker.get_wallet_and_session(&user_id)?;
-        let SensitiveWallet::V0(w) = wallet;
-        let site = w.sites.get(&user_id.to_string()).ok_or(NgError::UserNotFound)?;
-        let user_priv = site.get_individual_user_priv_key().ok_or(NgError::NotFound)?;
-        let core = site.cores[0];  //TODO: cycle the other cores on failure to connect
-        let server_peer_id = core.0;
-        let infos = w.brokers.get(&server_peer_id.to_string()).ok_or(NgError::BrokerNotFound)?;
-        let mut server_peer_id = None;
-        let mut bind_address = None;
-        for info in infos {
-            if let BrokerInfoV0::ServerV0(server) = info {
-                match &server.server_type {
-                    BrokerServerTypeV0::Localhost(port) =>
-                        bind_address = Some(BindAddress::new_localhost_with_port(*port)),
-                    BrokerServerTypeV0::BoxPrivate(addresses) |
-                    BrokerServerTypeV0::Public(addresses) |
-                    BrokerServerTypeV0::BoxPublicDyn(addresses) =>
-                        if addresses.len() > 0 {
-                            bind_address = Some(addresses[0])
-                        },
-                    BrokerServerTypeV0::Domain(domain) =>
-                        /* Use default port will be WS_PORT.
-                         * parse_ipv4_and_port do not perform name resolution, but could if desired. */
-                        bind_address = parse_ip_and_port_for(domain.clone(), "broker's domain").ok()
-                };
-                if bind_address != None {
-                    server_peer_id = Some(server.peer_id);
-                    break
+        /* A normal client will call this with a session identifying a wallet
+         * with hopefully some admin user keys; But in headless mode, the local
+         * broker has no wallet; It knows only the privKey, peerId etc of one
+         * admin user (stored in the headless mode setting (Cf init_headless)).
+         * This also solves a catch-22 when booting up a broker: headless admin
+         * is a "normal" user, not managed by the broker; Therefore a headless
+         * mode session can't be opened for it; And there are not yet any other
+         * user. */
+        if let LocalBrokerConfig::Headless(cfg) = &broker.config {
+            // Just check that the caller didn't mistakenly pass an actual session_id:
+            if session_id != HEADLESS_ADMIN_SESSION_ID {
+                return Err(NgError::InvalidArgument);
+            }
+            let admin_user_key = cfg.admin_user_key.clone().ok_or(NgError::NotFound)?;
+            (cfg.server_peer_id, admin_user_key, cfg.server_addr)
+        } else {
+            let user_id = broker.get_session(session_id)?.config.user_id();
+            let (wallet, session) = broker.get_wallet_and_session(&user_id)?;
+            let SensitiveWallet::V0(w) = wallet;
+            let site = w.sites.get(&user_id.to_string()).ok_or(NgError::UserNotFound)?;
+            let user_priv = site.get_individual_user_priv_key().ok_or(NgError::NotFound)?;
+            let core = site.cores[0];  //TODO: cycle the other cores on failure to connect
+            let server_peer_id = core.0;
+            let infos = w.brokers.get(&server_peer_id.to_string()).ok_or(NgError::BrokerNotFound)?;
+            let mut server_peer_id = None;
+            let mut bind_address = None;
+            for info in infos {
+                if let BrokerInfoV0::ServerV0(server) = info {
+                    match &server.server_type {
+                        BrokerServerTypeV0::Localhost(port) =>
+                            bind_address = Some(BindAddress::new_localhost_with_port(*port)),
+                        BrokerServerTypeV0::BoxPrivate(addresses) |
+                        BrokerServerTypeV0::Public(addresses) |
+                        BrokerServerTypeV0::BoxPublicDyn(addresses) =>
+                            if addresses.len() > 0 {
+                                bind_address = Some(addresses[0])
+                            },
+                        BrokerServerTypeV0::Domain(domain) =>
+                            /* Use default port will be WS_PORT.
+                             * parse_ipv4_and_port do not perform name resolution, but could if desired. */
+                            bind_address = parse_ip_and_port_for(domain.clone(), "broker's domain").ok()
+                    };
+                    if bind_address != None {
+                        server_peer_id = Some(server.peer_id);
+                        break
+                    }
                 }
             }
+            let server_peer_id = server_peer_id.ok_or(NgError::BrokerError)?;
+            let bind_address = bind_address.ok_or(NgError::BrokerError)?;
+            (server_peer_id, user_priv, bind_address)
         }
-        let server_peer_id = server_peer_id.ok_or(NgError::BrokerError)?;
-        let bind_address = bind_address.ok_or(NgError::BrokerError)?;
-        (server_peer_id, user_priv, bind_address)
     };
     let (peer_privk, peer_pubk) = generate_keypair();
     BROKER
