@@ -107,8 +107,9 @@ const streamed_api: Record<string, number> = {
     disconnections_subscribe: 0,
 };
 
-function call_sdk(method: string, args?: any) {
+async function call_sdk(method: string, args?: any) {
     //console.log("call_sdk", method, args)
+    await worker_ready;
 
     const { port1, port2 } = new MessageChannel();
 
