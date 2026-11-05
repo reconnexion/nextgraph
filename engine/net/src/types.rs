@@ -2838,6 +2838,7 @@ impl From<AppMessage> for ProtocolMessage {
 pub enum AdminRequestContentV0 {
     AddUser(AddUser),
     DelUser(DelUser),
+    ModifyUser(ModifyUser),
     ListUsers(ListUsers),
     ListInvitations(ListInvitations),
     AddInvitation(AddInvitation),
@@ -2850,6 +2851,7 @@ impl AdminRequestContentV0 {
         match self {
             Self::AddUser(a) => a.type_id(),
             Self::DelUser(a) => a.type_id(),
+            Self::ModifyUser(a) => a.type_id(),
             Self::ListUsers(a) => a.type_id(),
             Self::ListInvitations(a) => a.type_id(),
             Self::AddInvitation(a) => a.type_id(),
@@ -2861,6 +2863,7 @@ impl AdminRequestContentV0 {
         match self {
             Self::AddUser(a) => a.get_actor(),
             Self::DelUser(a) => a.get_actor(),
+            Self::ModifyUser(a) => a.get_actor(),
             Self::ListUsers(a) => a.get_actor(),
             Self::ListInvitations(a) => a.get_actor(),
             Self::AddInvitation(a) => a.get_actor(),
