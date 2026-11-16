@@ -103,14 +103,14 @@ impl EActor for Actor<'_, RequestServicePluginSetStatus, AdminResponse> {
                 let peer_key = serv.peer_id.slice();
                 let connected = broker.is_connected(peer_key);
                 if serv.status != PluginStatus::Enabled {
-                    sb.app_plugin_deactivate(&serv.peer_id, &serv.name).await;
+                    sb.app_plugin_deactivate(&serv.peer_id, &serv.service_name).await;
                 } else if connected {
-                    sb.app_plugin_activate(&serv.peer_id, &serv.name).await;
+                    sb.app_plugin_activate(&serv.peer_id, &serv.service_name).await;
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 if connected {
                     let req = PluginNotify {
-                        service_name: serv.name.clone(),
+                        service_name: serv.service_name.clone(),
                         notification: PluginNotification::StatusChange(serv.status.clone()),
                     };
                     // prepared while we hold the lock but not run. See `notification.await` below
@@ -120,7 +120,7 @@ impl EActor for Actor<'_, RequestServicePluginSetStatus, AdminResponse> {
                         Ok(fut) => notification = Some(Box::pin(fut)),
                         Err(NgError::ConnectionNotFound) => (),
                         Err(e) => log_err!("Cannot notify plugin {:?} for service {}: {:?}",
-                                           serv.peer_id, serv.name, e),
+                                           serv.peer_id, serv.service_name, e),
                     }
                 }
             }
@@ -129,7 +129,7 @@ impl EActor for Actor<'_, RequestServicePluginSetStatus, AdminResponse> {
         };
         fsm.lock().await.send(response.into()).await?;
         if let Some(notification) = notification {
-            let (peer_id, name) = (serv.peer_id, serv.name.clone());
+            let (peer_id, name) = (serv.peer_id, serv.service_name.clone());
             spawn_and_log_error(async move {
                 if let Err(e) = notification.await {
                     log_err!("Cannot notify plugin {:?} for service {}: {:?}", peer_id, name, e);

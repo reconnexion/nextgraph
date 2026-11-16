@@ -32,6 +32,8 @@ pub const BLOCK_ID_SIZE: usize = 33;
 pub const BLOCK_KEY_SIZE: usize = 33;
 /// Size of serialized DirectPeerId
 pub const DIRECT_PEER_ID_SIZE: usize = 33;
+/// Size of a UserId
+pub const USER_ID_SIZE: usize = 33;
 /// Size of a blake3::hash
 pub const BLAKE3_HASH_SIZE: usize = 32;
 /// Size of serialized Object with deps reference.

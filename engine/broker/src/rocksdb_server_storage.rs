@@ -28,7 +28,7 @@ use ng_storage_rocksdb::block_storage::RocksDbBlockStorage;
 use ng_storage_rocksdb::kcv_storage::RocksDbKCVStorage;
 
 use crate::server_broker::*;
-use crate::server_storage::admin::{account::Account, invitation::Invitation, wallet::Wallet, service_plugin::ServicePlugin};
+use crate::server_storage::admin::{account::Account, invitation::Invitation, wallet::Wallet, service_plugin::ServicePlugin, service_plugin_users::HydratedUserState};
 use crate::server_storage::core::*;
 
 pub(crate) struct RocksDbServerStorage {
@@ -827,5 +827,31 @@ impl RocksDbServerStorage {
     }
     pub(crate) fn service_plugin_get(&self, name: &String, peer_id: &DirectPeerId) -> Result<ng_net::types::ServicePlugin, StorageError> {
         ServicePlugin::get(&self.core_storage, name, peer_id)
+    }
+    /* Returns the list of admin-enabled services available for a user, with their
+     * current status (user-enabled? link to settings? active?) */
+    pub(crate) fn service_plugin_list_for_user(&self, user_id: &UserId) -> Result<Vec<ng_net::types::MyService>, StorageError> {
+        let mut my_services = vec![];
+        for srv in self.service_plugin_list()? {
+            if srv.status == PluginStatus::Enabled {
+                match HydratedUserState::find(&self.core_storage, &srv.service_name, user_id) {
+                    Ok(user_state) =>
+                        my_services.push(MyService {
+                            service_name: srv.service_name,
+                            is_user_enabled: user_state.is_user_enabled,
+                            settings_nuri: Some(user_state.content.settings_nuri),
+                        }),
+                    Err(StorageError::NotFound) =>
+                        my_services.push(MyService {
+                            service_name: srv.service_name,
+                            is_user_enabled: false,
+                            settings_nuri: None,
+                        }),
+                    Err(e) =>
+                        return Err(e),
+                }
+            }
+        }
+        Ok(my_services)
     }
 }

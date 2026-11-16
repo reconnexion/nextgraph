@@ -1028,7 +1028,7 @@ async fn main_inner() -> Result<(), NgcliError> {
                         AdminResponseContentV0::ServicePluginList(list) => {
                             println!("Registered plugin services:\n");
                             for srv in list {
-                                println!("{} (peer {}): {:?}", srv.name, srv.peer_id, srv.status);
+                                println!("{} (peer {}): {:?}", srv.service_name, srv.peer_id, srv.status);
                             }
                         }
                         _ => return Err(NgError::InvalidResponse.into()),
@@ -1049,7 +1049,7 @@ async fn main_inner() -> Result<(), NgcliError> {
                         keys[1],
                         config_v0,
                         RequestServicePluginSetStatus::V0(RequestServicePluginSetStatusV0 {
-                            service: ServicePlugin { name, peer_id, status },
+                            service: ServicePlugin { service_name: name, peer_id, status },
                         }),
                     )
                     .await?;

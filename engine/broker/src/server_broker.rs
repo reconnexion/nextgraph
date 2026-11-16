@@ -787,7 +787,7 @@ impl IServerBroker for ServerBroker {
                     /* That's the first connection: register the plugin with a
                      * Waiting status: */
                     let serv = ServicePlugin {
-                        name: req.service_name.clone(),
+                        service_name: req.service_name.clone(),
                         peer_id: peer_id,
                         status: PluginStatus::Waiting,
                     };
@@ -798,7 +798,7 @@ impl IServerBroker for ServerBroker {
             };
         log_debug!("Service {} (peer {:?}) is {:?}", req.service_name, peer_id, serv.status);
         if serv.status == PluginStatus::Enabled {
-            self.app_plugin_activate(&peer_id, &serv.name).await;
+            self.app_plugin_activate(&peer_id, &serv.service_name).await;
         }
         Ok(AppPluginRegisterResp::V0 { status: serv.status })
     }
@@ -1094,17 +1094,15 @@ impl IServerBroker for ServerBroker {
     }
 
     fn service_plugin_list(&self) -> Result<Vec<ServicePlugin>, ProtocolError> {
-        self.storage.service_plugin_list()
-            .map_err(Into::into)
+        self.storage.service_plugin_list().map_err(Into::into)
     }
     fn service_plugin_put(&self, serv: &ServicePlugin, for_create: bool) -> Result<(), ProtocolError> {
-        self.storage
-            .service_plugin_put(serv, for_create)
-            .map_err(Into::into)
+        self.storage.service_plugin_put(serv, for_create).map_err(Into::into)
     }
     fn service_plugin_get(&self, name: &String, peer_id: &DirectPeerId) -> Result<ng_net::types::ServicePlugin, ProtocolError> {
-        self.storage
-            .service_plugin_get(name, peer_id)
-            .map_err(Into::into)
+        self.storage.service_plugin_get(name, peer_id).map_err(Into::into)
+    }
+    fn service_plugin_list_for_user(&self, user_id: &UserId) -> Result<Vec<MyService>, ServerError> {
+        self.storage.service_plugin_list_for_user(user_id).map_err(Into::into)
     }
 }

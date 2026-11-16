@@ -25,7 +25,7 @@ impl<'a> ServicePlugin<'a> {
         v
     }
     pub fn open(name: &String, peer_id: &DirectPeerId, storage: &'a dyn KCVStorage) -> Result<ServicePlugin<'a>, StorageError> {
-        let opening = ServicePlugin { name: name.clone(), peer_id: peer_id.clone(), storage };
+        let opening = Self { name: name.clone(), peer_id: peer_id.clone(), storage };
         if !opening.exists() {
             log_err!("ServicePlugin::open: no plugin service {}", &name);
             return Err(StorageError::NotFound);
@@ -37,13 +37,13 @@ impl<'a> ServicePlugin<'a> {
         storage: &'a dyn KCVStorage,
     ) -> Result<ServicePlugin<'a>, StorageError> {
         let serv_ =
-            ServicePlugin { name: serv.name.clone(), peer_id: serv.peer_id.clone(), storage };
+            Self { name: serv.service_name.clone(), peer_id: serv.peer_id.clone(), storage };
         if serv_.exists() {
             return Err(StorageError::AlreadyExists);
         }
         storage.put(
             Self::PREFIX,
-            &Self::key(&serv.name, &serv.peer_id),
+            &Self::key(&serv.service_name, &serv.peer_id),
             None,
             &to_vec(&serv)?,
             &None,
@@ -54,13 +54,13 @@ impl<'a> ServicePlugin<'a> {
         serv: &ng_net::types::ServicePlugin,
         storage: &'a dyn KCVStorage,
     ) -> Result<(), StorageError> {
-        let serv_ = ServicePlugin { name: serv.name.clone(), peer_id: serv.peer_id.clone(), storage };
+        let serv_ = Self { name: serv.service_name.clone(), peer_id: serv.peer_id.clone(), storage };
         if !serv_.exists() {
             return Err(StorageError::NotFound);
         }
         storage.put(
             Self::PREFIX,
-            &Self::key(&serv.name, &serv.peer_id),
+            &Self::key(&serv.service_name, &serv.peer_id),
             None,
             &to_vec(&serv)?,
             &None,

@@ -2876,6 +2876,10 @@ pub struct PluginResponse {
     pub response_payload: String,
 }
 
+/// Don't laugh: routing in done by type
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServiceListRequest {}
+
 //
 // ADMIN PROTOCOL
 //
@@ -3346,7 +3350,7 @@ pub struct ServicePlugin {
     /* A given client (peer_id) could register several plugin names.
      * Several clients could claim the same plugin names.
      * Therefore, the key of a given plugin is the plugin name and the peer id. */
-    pub name: String,
+    pub service_name: String,
     pub peer_id: DirectPeerId,
     /* Only relay messages from/to this plugin only if this is set: */
     pub status: PluginStatus,
@@ -3357,6 +3361,15 @@ pub enum PluginStatus {
     Waiting,  // for the admin to enable or deny
     Enabled,  // the plugin is allowed to take messages and impersonate users
     Denied,   // this decision is final for the plugin (can be reverted though)
+}
+
+/** Service from a user point of view: only visible if admin-enabled, with the
+ * service name, is it user-enabled and what's the settings file if any. */
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MyService {
+    pub service_name: String,
+    pub is_user_enabled: bool,
+    pub settings_nuri: Option<String>,
 }
 
 //
@@ -4148,6 +4161,7 @@ pub enum ClientRequestContentV0 {
     InboxPost(InboxPost),
 
     PluginRequest(PluginRequest),
+    ServiceListRequest(ServiceListRequest),
 }
 
 impl ClientRequestContentV0 {
@@ -4166,6 +4180,7 @@ impl ClientRequestContentV0 {
             ClientRequestContentV0::BlocksGet(a) => a.set_overlay(overlay),
             ClientRequestContentV0::WalletPutExport(_a) => {}
             ClientRequestContentV0::PluginRequest(_a) => {}
+            ClientRequestContentV0::ServiceListRequest(_a) => {}
             _ => unimplemented!(),
         }
     }
@@ -4221,6 +4236,7 @@ impl ClientRequest {
                 ClientRequestContentV0::InboxRegister(r) => r.get_actor(self.id()),
                 ClientRequestContentV0::InboxPost(r) => r.get_actor(self.id()),
                 ClientRequestContentV0::PluginRequest(r) => r.get_actor(self.id()),
+                ClientRequestContentV0::ServiceListRequest(r) => r.get_actor(self.id()),
                 _ => unimplemented!(),
             },
         }
@@ -4367,6 +4383,7 @@ pub enum ClientResponseContentV0 {
     BlocksFound(BlocksFound),
     RepoPinStatus(RepoPinStatus),
     PluginResponse(PluginResponse),
+    ServiceList(Vec<MyService>),
 }
 
 /// Response to a `ClientRequest`

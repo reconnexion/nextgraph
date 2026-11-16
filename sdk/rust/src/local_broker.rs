@@ -2848,18 +2848,16 @@ pub async fn doc_sparql_update(
     }
 }
 
-pub async fn get_broker() -> Result<async_std::sync::RwLockWriteGuard<'static, LocalBroker>, NgError>
-{
-    let broker = match LOCAL_BROKER.get() {
-        None | Some(Err(_)) => return Err(NgError::LocalBrokerNotInitialized),
-        Some(Ok(broker)) => broker.write().await,
-    };
-    return Ok(broker);
+pub fn get_broker() -> Result<&'static RwLock<LocalBroker>, NgError> {
+    match LOCAL_BROKER.get() {
+        None | Some(Err(_)) => Err(NgError::LocalBrokerNotInitialized),
+        Some(Ok(broker)) => Ok(broker),
+    }
 }
 
 #[doc(hidden)]
 pub async fn test_remove_repo_write_cap(session_id: u64, repo_nuri: String) -> Result<(), NgError> {
-    let mut broker = get_broker().await?;
+    let mut broker = get_broker()?.write().await;
     let session_idx = broker.get_local_session_id_for_mut(session_id)?;
     let session = broker.opened_sessions_list[session_idx]
         .as_mut()
@@ -2981,7 +2979,7 @@ pub async fn doc_sparql_select(
     sparql: String,
     nuri: Option<String>,
 ) -> Result<Vec<Quad>, NgError> {
-    let broker = get_broker().await?;
+    let broker = get_broker()?.write().await;
     let session = broker.get_session(session_id)?;
     session.verifier.query_sparql_select(sparql, nuri)
 }
@@ -2994,7 +2992,7 @@ pub async fn doc_query_quads_for_shape_type(
     shape: &ShapeIri,
     filter_subjects: Option<&Vec<String>>,
 ) -> Result<Vec<Quad>, NgError> {
-    let broker = get_broker().await?;
+    let broker = get_broker()?.write().await;
     let session = broker.get_session(session_id)?;
     let scope = match nuri {
         Some(nuri) => QueryScope::from(vec![nuri]),
@@ -3152,10 +3150,7 @@ pub async fn plugin_request(
         request_payload,
         caller: None,
     };
-    let broker = match LOCAL_BROKER.get() {
-        None | Some(Err(_)) => return Err(NgError::LocalBrokerNotInitialized),
-        Some(Ok(broker)) => broker.read().await,
-    };
+    let broker = get_broker()?.read().await;
     // In both cases, the local broker should not stay locked while the plugin works on it.
     let response: PluginResponse = if let LocalBrokerConfig::Headless(_) = &broker.config {
         let response = broker.prepare_request_headless(request).await?;
@@ -3183,6 +3178,21 @@ pub async fn plugin_request(
         }
     };
     Ok(response.response_payload)
+}
+
+
+pub async fn service_plugin_list(session_id: u64) -> Result<Vec<MyService>, NgError> {
+    let broker = get_broker()?.read().await;
+    let session = broker.get_session(session_id)?;
+    let response = session
+        .verifier
+        .prepare_client_request::<_, Vec<MyService>>(ServiceListRequest {})
+        .await?;
+    drop(broker);   // Free the lock on LOCAL_BROKER
+    match response.await? {
+        SoS::Stream(_) => Err(NgError::InvalidResponse),
+        SoS::Single(l) => Ok(l),
+    }
 }
 
 /// retrieves the ID of one of the 3 stores of a the personal Site (3P: public, protected, or private)
@@ -3407,8 +3417,7 @@ pub async fn admin_service_plugin_set_status(
     let peer_id = decode_key(&peer_id).map_err(|_| ProtocolError::InvalidValue)?;
     let status =
         if enable { PluginStatus::Enabled } else { PluginStatus::Denied };
-    let service =
-        ng_net::types::ServicePlugin { name, peer_id, status };
+    let service = ServicePlugin { service_name: name, peer_id, status };
     do_admin_call(session_id, RequestServicePluginSetStatus::V0(RequestServicePluginSetStatusV0{ service }))
         .await?;
     Ok(())

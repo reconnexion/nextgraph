@@ -23,3 +23,5 @@ pub mod inbox_post;
 pub mod inbox_register;
 
 pub mod client_event;
+
+pub mod list_services;

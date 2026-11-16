@@ -904,7 +904,7 @@ struct ServicePluginStrings {
 impl From<ServicePlugin> for ServicePluginStrings {
     fn from(serv: ServicePlugin) -> Self {
         ServicePluginStrings {
-            name: serv.name,
+            name: serv.service_name,
             peer_id: serv.peer_id.to_string(),
             status: serv.status,
         }
@@ -2422,6 +2422,18 @@ pub async fn call_plugin(
             .map_err(|e: NgError| e.to_string())?;
     js_sys::JSON::parse(&response_payload)
         .map_err(|_| "call_plugin: Cannot JSON-parse the plugin response".to_string())
+}
+
+/// Ask for the list of services that are available for the calling user
+#[wasm_bindgen]
+pub async fn list_services(session_id: JsValue) -> Result<JsValue, String> {
+    let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id)
+        .map_err(|_| "list_services: Deserialization error of session_id".to_string())?;
+    let servs: Vec<ng_net::types::MyService> =
+        nextgraph::local_broker::service_plugin_list(session_id)
+            .await
+            .map_err(|e: NgError| e.to_string())?;
+    Ok(serde_wasm_bindgen::to_value(&servs).unwrap())
 }
 
 #[cfg(wasmpack_target = "nodejs")]
