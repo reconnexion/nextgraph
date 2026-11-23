@@ -205,5 +205,5 @@ pub trait IServerBroker: Send + Sync {
     fn service_plugin_list(&self) -> Result<Vec<ServicePlugin>, ProtocolError>;
     fn service_plugin_put(&self, serv: &ServicePlugin, for_create: bool) -> Result<(), ProtocolError>;
     fn service_plugin_get(&self, name: &String, peer_id: &DirectPeerId) -> Result<ServicePlugin, ProtocolError>;
-    fn service_plugin_list_for_user(&self, user_id: &UserId) -> Result<Vec<MyService>, ServerError>;
+    async fn service_plugin_list_for_user(&self, user_id: &UserId) -> Result<Vec<AvailableService>, ServerError>;
 }

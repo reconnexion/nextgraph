@@ -2431,7 +2431,7 @@ pub async fn call_plugin(
 pub async fn list_services(session_id: JsValue) -> Result<JsValue, String> {
     let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id)
         .map_err(|_| "list_services: Deserialization error of session_id".to_string())?;
-    let servs: Vec<ng_net::types::MyService> =
+    let servs: Vec<ng_net::types::AvailableService> =
         nextgraph::local_broker::service_plugin_list(session_id)
             .await
             .map_err(|e: NgError| e.to_string())?;

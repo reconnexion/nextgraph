@@ -3366,8 +3366,9 @@ pub enum PluginStatus {
 /** Service from a user point of view: only visible if admin-enabled, with the
  * service name, is it user-enabled and what's the settings file if any. */
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MyService {
+pub struct AvailableService {
     pub service_name: String,
+    pub online: bool,   // If the plugin is currently connected
     pub is_user_enabled: bool,
     pub settings_nuri: Option<String>,
 }
@@ -4383,7 +4384,7 @@ pub enum ClientResponseContentV0 {
     BlocksFound(BlocksFound),
     RepoPinStatus(RepoPinStatus),
     PluginResponse(PluginResponse),
-    ServiceList(Vec<MyService>),
+    ServiceList(Vec<AvailableService>),
 }
 
 /// Response to a `ClientRequest`

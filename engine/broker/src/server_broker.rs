@@ -1102,7 +1102,23 @@ impl IServerBroker for ServerBroker {
     fn service_plugin_get(&self, name: &String, peer_id: &DirectPeerId) -> Result<ng_net::types::ServicePlugin, ProtocolError> {
         self.storage.service_plugin_get(name, peer_id).map_err(Into::into)
     }
-    fn service_plugin_list_for_user(&self, user_id: &UserId) -> Result<Vec<MyService>, ServerError> {
-        self.storage.service_plugin_list_for_user(user_id).map_err(Into::into)
+    async fn service_plugin_list_for_user(&self, user_id: &UserId) -> Result<Vec<AvailableService>, ServerError> {
+        let user_states = self.storage.service_plugin_list_user_states(user_id)?;
+        let state = self.state.read().await;
+        Ok(user_states.into_iter().map(|(service_name, u)| {
+            let online = state.active_plugins.contains_key(&service_name);
+            match u {
+                Some(user_state) => AvailableService {
+                    service_name, online,
+                    is_user_enabled: user_state.is_user_enabled,
+                    settings_nuri: Some(user_state.content.settings_nuri),
+                },
+                None => AvailableService {
+                    service_name, online,
+                    is_user_enabled: false,
+                    settings_nuri: None,
+                },
+            }
+        }).collect())
     }
 }

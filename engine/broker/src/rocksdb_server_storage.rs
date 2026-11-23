@@ -828,30 +828,22 @@ impl RocksDbServerStorage {
     pub(crate) fn service_plugin_get(&self, name: &String, peer_id: &DirectPeerId) -> Result<ng_net::types::ServicePlugin, StorageError> {
         ServicePlugin::get(&self.core_storage, name, peer_id)
     }
-    /* Returns the list of admin-enabled services available for a user, with their
-     * current status (user-enabled? link to settings? active?) */
-    pub(crate) fn service_plugin_list_for_user(&self, user_id: &UserId) -> Result<Vec<ng_net::types::MyService>, StorageError> {
-        let mut my_services = vec![];
+    /* Returns the list of service-name × user_state of all admin-enabled services
+     * available for a given user. */
+    pub(crate) fn service_plugin_list_user_states(&self, user_id: &UserId) -> Result<Vec<(String, Option<HydratedUserState>)>, StorageError> {
+        let mut user_states = vec![];
         for srv in self.service_plugin_list()? {
             if srv.status == PluginStatus::Enabled {
                 match HydratedUserState::find(&self.core_storage, &srv.service_name, user_id) {
                     Ok(user_state) =>
-                        my_services.push(MyService {
-                            service_name: srv.service_name,
-                            is_user_enabled: user_state.is_user_enabled,
-                            settings_nuri: Some(user_state.content.settings_nuri),
-                        }),
+                        user_states.push((srv.service_name, Some(user_state))),
                     Err(StorageError::NotFound) =>
-                        my_services.push(MyService {
-                            service_name: srv.service_name,
-                            is_user_enabled: false,
-                            settings_nuri: None,
-                        }),
+                        user_states.push((srv.service_name, None)),
                     Err(e) =>
                         return Err(e),
                 }
             }
         }
-        Ok(my_services)
+        Ok(user_states)
     }
 }

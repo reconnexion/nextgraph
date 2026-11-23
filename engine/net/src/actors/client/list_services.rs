@@ -23,7 +23,7 @@ use crate::{actor::*, types::ProtocolMessage};
 
 impl ServiceListRequest {
     pub fn get_actor(&self, id: i64) -> Box<dyn EActor> {
-        Actor::<ServiceListRequest, Vec<MyService>>::new_responder(id)
+        Actor::<ServiceListRequest, Vec<AvailableService>>::new_responder(id)
     }
 }
 
@@ -49,7 +49,7 @@ impl From<ServiceListRequest> for ProtocolMessage {
     }
 }
 
-impl TryFrom<ProtocolMessage> for Vec<MyService> {
+impl TryFrom<ProtocolMessage> for Vec<AvailableService> {
     type Error = ProtocolError;
     fn try_from(msg: ProtocolMessage) -> Result<Self, Self::Error> {
         let res: ClientResponseContentV0 = msg.try_into()?;
@@ -62,16 +62,16 @@ impl TryFrom<ProtocolMessage> for Vec<MyService> {
     }
 }
 
-impl From<Vec<MyService>> for ProtocolMessage {
-    fn from(l: Vec<MyService>) -> ProtocolMessage {
+impl From<Vec<AvailableService>> for ProtocolMessage {
+    fn from(l: Vec<AvailableService>) -> ProtocolMessage {
         ClientResponseContentV0::ServiceList(l).into()
     }
 }
 
-impl Actor<'_, ServiceListRequest, Vec<MyService>> {}
+impl Actor<'_, ServiceListRequest, Vec<AvailableService>> {}
 
 #[async_trait::async_trait]
-impl EActor for Actor<'_, ServiceListRequest, Vec<MyService>> {
+impl EActor for Actor<'_, ServiceListRequest, Vec<AvailableService>> {
     async fn respond(
         &mut self,
         _msg: ProtocolMessage,
@@ -79,7 +79,7 @@ impl EActor for Actor<'_, ServiceListRequest, Vec<MyService>> {
     ) -> Result<(), ProtocolError> {
         let user = fsm.lock().await.user_id()?;
         let sb = { BROKER.read().await.get_server_broker()? };
-        let res = sb.read().await.service_plugin_list_for_user(&user);
+        let res = sb.read().await.service_plugin_list_for_user(&user).await;
         fsm.lock().await.send_in_reply_to(res.into(), self.id()).await?;
         Ok(())
     }

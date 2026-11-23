@@ -3181,12 +3181,12 @@ pub async fn plugin_request(
 }
 
 
-pub async fn service_plugin_list(session_id: u64) -> Result<Vec<MyService>, NgError> {
+pub async fn service_plugin_list(session_id: u64) -> Result<Vec<AvailableService>, NgError> {
     let broker = get_broker()?.read().await;
     let session = broker.get_session(session_id)?;
     let response = session
         .verifier
-        .prepare_client_request::<_, Vec<MyService>>(ServiceListRequest {})
+        .prepare_client_request::<_, Vec<AvailableService>>(ServiceListRequest {})
         .await?;
     drop(broker);   // Free the lock on LOCAL_BROKER
     match response.await? {
