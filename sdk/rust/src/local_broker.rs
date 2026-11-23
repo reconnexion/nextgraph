@@ -3412,11 +3412,9 @@ pub async fn admin_service_plugin_set_status(
     session_id: u64,
     name: String,  // name and peer_id identify the plugin
     peer_id: String,
-    enable: bool,  // The new status (the only field that can be modified)
+    status: PluginStatus,  // The new status (the only field that can be modified)
 ) -> Result<(), ProtocolError> {
     let peer_id = decode_key(&peer_id).map_err(|_| ProtocolError::InvalidValue)?;
-    let status =
-        if enable { PluginStatus::Enabled } else { PluginStatus::Denied };
     let service = ServicePlugin { service_name: name, peer_id, status };
     do_admin_call(session_id, RequestServicePluginSetStatus::V0(RequestServicePluginSetStatusV0{ service }))
         .await?;

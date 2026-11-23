@@ -882,18 +882,20 @@ pub async fn admin_service_plugin_set_status(
     session_id: JsValue,
     name: String,
     peer_id: String,
-    enabled: bool,
+    status: JsValue,
 ) -> Result<(), String> {
     let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id.clone())
         .map_err(|_| "Deserialization error of session_id")?;
-    nextgraph::local_broker::admin_service_plugin_set_status(session_id, name, peer_id, enabled)
+    let status: PluginStatus = serde_wasm_bindgen::from_value::<PluginStatus>(status.clone())
+        .map_err(|_| "Deserialization error of status")?;
+    nextgraph::local_broker::admin_service_plugin_set_status(session_id, name, peer_id, status)
         .await
         .map_err(|e: ProtocolError| e.to_string())?;
     Ok(())
 }
 
 /// ServicePlugin as seen from JS: peer_id is in the same string form as
-/// admin_service_plugin_update takes it.
+/// admin_service_plugin_set_status takes it.
 #[derive(Serialize)]
 struct ServicePluginStrings {
     name: String,
