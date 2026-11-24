@@ -14,8 +14,8 @@
 use serde::{Deserialize, Serialize};
 use serde_bare::{from_slice, to_vec};
 use ng_repo::errors::StorageError;
-use ng_repo::kcv_storage::KCVStorage;
-use ng_repo::log::{log, log_debug};
+use ng_repo::kcv_storage::{KCVStorage, ReadTransaction, WriteTransaction};
+use ng_repo::log::*;
 use ng_repo::object::{USER_ID_SIZE, BLAKE3_HASH_SIZE};
 use ng_repo::types::UserId;
 
@@ -29,8 +29,8 @@ pub struct UserState {
 }
 
 pub struct HydratedUserState {
-    pub is_user_enabled: bool,
-    pub is_dirty: bool,
+    pub user_enabled: bool,
+    pub dirty: bool,
     pub content: UserState,
 }
 
@@ -60,45 +60,94 @@ impl HydratedUserState {
         v
     }
 
-    // Retrieve the UserState for a given service_name and UserId:
-    pub fn find<'a>(
-        storage: &'a dyn KCVStorage,
+    /// Retrieve the UserState for a given service_name and UserId.
+    /// Works on the storage itself as well as within a transaction.
+    pub fn find<T: ReadTransaction + ?Sized>(
+        tx: &T,
         service_name: &String,
         user_id: &UserId,
     ) -> Result<HydratedUserState, StorageError> {
-        let mut found = None;
-        storage.write_transaction(&mut |tx| {
-            for is_user_enabled in [false, true] {
-                for is_dirty in [false, true] {
-                    let k = Self::key(service_name, user_id, is_user_enabled, is_dirty);
-                    match tx.get(Self::PREFIX, &k, None, &None) {
-                        Ok(v) => {
-                            found = Some((is_user_enabled, is_dirty, v));
-                            return Ok(());
-                        }
-                        Err(StorageError::NotFound) => (),
-                        Err(e) => return Err(e),
+        for user_enabled in [false, true] {
+            for dirty in [false, true] {
+                let k = Self::key(service_name, user_id, user_enabled, dirty);
+                match tx.get(Self::PREFIX, &k, None, &None) {
+                    Ok(v) => {
+                        return Ok(Self { user_enabled, dirty, content: from_slice(&v)? });
                     }
+                    Err(StorageError::NotFound) => (),
+                    Err(e) => return Err(e),
                 }
             }
-            log_debug!("HydratedUserState.find: no key for service {}, user {}", service_name, user_id);
-            Ok(())
-        })?;
-        let (is_user_enabled, is_dirty, v) = found.ok_or(StorageError::NotFound)?;
-        Ok(Self { is_user_enabled, is_dirty, content: from_slice(&v)? })
+        }
+        log_debug!("HydratedUserState.find: no key for service {}, user {}", service_name, user_id);
+        Err(StorageError::NotFound)
     }
 
-    /** Given a service name and a UserId, tells if that service is enabled for that used.
-     * Used to populate the list of services for a given user. */
-    pub fn is_user_enabled<'a>(
-        storage: &'a dyn KCVStorage,
+    /** Change the key of a value */
+    fn change_key(
+        tx: &dyn WriteTransaction,
+        old_key: &Vec<u8>,
+        new_key: &Vec<u8>,
+    ) -> Result<(), StorageError> {
+        let v = tx.get(Self::PREFIX, old_key, None, &None)?;
+        tx.put(Self::PREFIX, new_key, None, &v, &None)?;
+        tx.del(Self::PREFIX, old_key, None, &None)
+    }
+
+    /** Set the user_enabled bit, returning the previous user state.
+     * Err out if the key does not exist. */
+    pub fn set_user_enabled(
+        storage: &dyn KCVStorage,
         service_name: &String,
         user_id: &UserId,
-    ) -> Result<bool, StorageError> {
-        match Self::find(storage, service_name, user_id) {
-            Ok(user_state) => Ok(user_state.is_user_enabled),
-            Err(StorageError::NotFound) => Ok(false), // never enabled
-            Err(e) => Err(e),
-        }
+        user_enabled: bool,
+    ) -> Result<HydratedUserState, StorageError> {
+        let mut previous = None;
+        storage.write_transaction(&mut |tx| {
+            let user_state = Self::find(tx, service_name, user_id)?;
+            if user_state.user_enabled == user_enabled {
+                log_warn!("service_plugin_users: set_user_enabled: \
+                    user-state for service {}, user {}, is already {}",
+                    service_name, user_id,
+                    if user_enabled { "enabled" } else { "disabled" });
+            } else {
+                let old_key =
+                    Self::key(service_name, user_id, user_state.user_enabled, user_state.dirty);
+                let new_key = Self::key(service_name, user_id, user_enabled, true);
+                Self::change_key(tx, &old_key, &new_key)?;
+            }
+            previous = Some(user_state);
+            Ok(())
+        })?;
+        previous.ok_or(StorageError::NotFound)
+    }
+
+    /** Create a new user state (user-enabled, dirty).
+     * Fails if there is already one, which should not happen unless the same
+     * user enable the same service very quickly. */
+    pub fn create(
+        storage: &dyn KCVStorage,
+        service_name: &String,
+        user_id: &UserId,
+        settings_nuri: &String,
+    ) -> Result<Self, StorageError> {
+        let user_state = UserState {
+            settings_nuri: settings_nuri.clone(),
+            plugin_state: Vec::<u8>::new(),
+        };
+        let v = to_vec(&user_state)?;
+        storage.write_transaction(&mut |tx| {
+            if Self::find(tx, service_name, user_id).is_ok() {
+                log_err!("HydratedUserState: create: user state already exist for service {service_name} and user {user_id}");
+                return Err(StorageError::AlreadyExists);
+            }
+            let k = Self::key(service_name, user_id, true, true);
+            tx.put(Self::PREFIX, &k, None, &v, &None)
+        })?;
+        Ok(HydratedUserState {
+            user_enabled: true,
+            dirty: true,
+            content: user_state,
+        })
     }
 }

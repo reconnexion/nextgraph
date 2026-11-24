@@ -88,6 +88,15 @@ impl EActor for Actor<'_, AppSessionStart, AppSessionStartResponse> {
 
             //TODO: if fsm.get_user_id is some, check that user_priv_key in credentials matches.
             //TODO: if no user in fsm (headless), check user in request is allowed
+
+            // TODO -- SECURITY
+            // A session without credentials (headless) can be opened for ANY user
+            // whose credentials ngd stores, and an existing verifier can be
+            // attached to by ANY peer. Since service plugins store real users'
+            // credentials, this lets any peer impersonate those users.
+            // Allow it only for the plugin peer of a service the user enabled
+            // (see active_plugins / service_names in ServerBroker), or for the
+            // user's own headless setup. See also ServerBroker::app_session_start.
             if remote.is_none() {
                 Err(ServerError::BrokerError)
             } else {

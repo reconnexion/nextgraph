@@ -122,6 +122,15 @@ pub trait IServerBroker: Send + Sync {
     /// The name of the plugin registered by the app connected as `peer`, if any.
     async fn service_name_of_peer(&self, peer: &DirectPeerId) -> Option<String>;
 
+    /// Sends `notification` to the plugin connected as `peer`, without waiting for its answer.
+    /// Fails with PluginNotFound if that peer is not connected.
+    async fn plugin_notify(
+        &self,
+        peer: &DirectPeerId,
+        service_name: &String,
+        notification: PluginNotification,
+    ) -> Result<(), ServerError>;
+
     /// Forwards `req` to the named plugin, on behalf of `caller`, and returns its response.
     async fn plugin_request_forward(
         &self,
@@ -206,4 +215,10 @@ pub trait IServerBroker: Send + Sync {
     fn service_plugin_put(&self, serv: &ServicePlugin, for_create: bool) -> Result<(), ProtocolError>;
     fn service_plugin_get(&self, name: &String, peer_id: &DirectPeerId) -> Result<ServicePlugin, ProtocolError>;
     async fn service_plugin_list_for_user(&self, user_id: &UserId) -> Result<Vec<AvailableService>, ServerError>;
+    async fn service_plugin_enable_for_user(
+        &self,
+        service_name: &String,
+        user_id: &UserId,
+        credentials: &Credentials,
+    ) -> Result<(), ServerError>;
 }

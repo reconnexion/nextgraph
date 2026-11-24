@@ -2865,9 +2865,17 @@ pub struct PluginNotify {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PluginEnabledForUser {
+    pub user_id: UserId,
+    pub settings_nuri: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PluginNotification {
-    /// The admin changed the status of this plugin.
+    /// The admin changed the status of this plugin:
     StatusChange(PluginStatus),
+    /// A user (re-)enabled the service:
+    EnabledForUser(PluginEnabledForUser),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3369,7 +3377,7 @@ pub enum PluginStatus {
 pub struct AvailableService {
     pub service_name: String,
     pub online: bool,   // If the plugin is currently connected
-    pub is_user_enabled: bool,
+    pub user_enabled: bool,
     pub settings_nuri: Option<String>,
 }
 

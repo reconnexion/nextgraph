@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use ng_repo::{
     block_storage::BlockStorage,
-    errors::{NgError, ProtocolError, ServerError},
+    errors::{NgError, ProtocolError, ServerError, StorageError},
     log::*,
     types::*,
 };
@@ -323,6 +323,114 @@ impl ServerBroker {
         //log_debug!("usage_stats_storage_flush: flushing storage stats for {}", &user_id);
         let mut lock = self.state.write().await;
         lock.usage_stats_storage_bytes.remove(user_id)
+    }
+
+    /// Creates, loads and registers a new verifier for that user.
+    async fn create_new_verifier(
+        &self,
+        user_id: &UserId,
+        credentials: &Credentials,
+        detach: bool,
+        attached: Option<(DirectPeerId, u64)>,
+    ) -> Result<Arc<RwLock<DetachableVerifier>>, ServerError> {
+        if *user_id != credentials.user_key.to_pub() {
+            log_debug!("InvalidRequest");
+            return Err(ServerError::InvalidRequest);
+        }
+        let local_peer_id = {
+            // Drop the lock before going further:
+            BROKER.read().await.get_server_peer_id()
+        };
+        let verifier = self
+            .new_verifier_from_credentials(user_id, credentials.clone(), local_peer_id, false)
+            .await;
+        if verifier.is_err() {
+            log_err!(
+                "new_verifier failed with: {:?}",
+                verifier.as_ref().unwrap_err()
+            );
+        }
+        let mut verifier = verifier?;
+        // TODO : key.zeroize();
+        // load verifier from local_storage
+        let _ = verifier.load();
+        //TODO: save opened_branches in user_storage, so that when we open again the verifier, the syncing can work
+        verifier.sync().await;
+        let session = DetachableVerifier { detach, attached, verifier };
+        let mut write_lock = self.state.write().await;
+        Ok(Arc::clone(
+            write_lock
+                .verifiers
+                .entry(*user_id)
+                .or_insert(Arc::new(RwLock::new(session))),
+        ))
+    }
+
+    /** Create the initial settings document for that user and service.
+     * Assumes there is no verifier for that user yet. */
+    async fn service_plugin_create_settings(
+        &self,
+        service_name: &String,
+        user_id: &UserId,
+        credentials: &Credentials,
+    ) -> Result<String, ServerError> {
+        // 1. Create the verifier
+        let verifier_lock_res = {
+            let lock = self.state.read().await;
+            lock.verifiers.get(user_id).map(|l| Arc::clone(l))
+        };
+        let verifier_lock = match verifier_lock_res {
+            Some(_) => {
+                log_err!("Cannot create settings doc for {service_name}: user {user_id} already has a verifier");
+                // TODO: deal with it
+                return Err(ServerError::OtherError);
+            }
+            None => self.create_new_verifier(user_id, credentials, true, None).await?,
+        };
+
+        // 2. Ask it to create the document
+        let request = AppRequest::new(
+            AppRequestCommandV0::Create,
+            NuriV0::new_private_store_target(),
+            Some(AppRequestPayload::V0(AppRequestPayloadV0::Create(DocCreate {
+                class: BranchCrdt::Graph("data:graph".to_string()),
+                destination: DocCreateDestination::Store,
+            }))),
+        );
+        let response = {
+            let mut session = verifier_lock.write().await;
+            session.verifier.app_request(request).await
+        };
+        match response {
+            Ok(AppResponse::V0(AppResponseV0::Nuri(nuri))) => Ok(nuri),
+            Ok(AppResponse::V0(AppResponseV0::Error(e))) => {
+                log_err!("Cannot create settings doc for {service_name}: {e}");
+                Err(ServerError::OtherError)
+            }
+            Ok(_) => Err(ServerError::OtherError),
+            Err(e) => {
+                log_err!("Cannot create settings doc for {service_name}: {e}");
+                Err(e.into())
+            }
+        }
+    }
+
+    /** Send this notification to the plugin for that service, without waiting for its answer.
+     * Fail with PluginNotFound if the plugin is not connected. */
+    async fn service_plugin_notify(
+        &self,
+        service_name: &String,
+        notification: PluginNotification,
+    ) -> Result<(), ServerError> {
+        let peer = self
+            .state
+            .read()
+            .await
+            .active_plugins
+            .get(service_name)
+            .ok_or(ServerError::PluginNotFound)?
+            .peer;
+        self.plugin_notify(&peer, service_name, notification).await
     }
 }
 
@@ -637,10 +745,19 @@ impl IServerBroker for ServerBroker {
         &self,
         req: AppSessionStart,
         remote: DirectPeerId,
-        local_peer_id: DirectPeerId,
+        _local_peer_id: DirectPeerId,
     ) -> Result<AppSessionStartResponse, ServerError> {
         let user_id = req.user_id();
         let id = (remote, req.session_id());
+
+        // TODO -- SECURITY
+        // Nothing checks that `remote` may act as `user_id`. Both branches below
+        // are affected: attaching to an existing verifier needs no credentials at
+        // all, and a new one falls back to the credentials stored in ngd (which
+        // includes real users' credentials stored for service plugins).
+        // Check here, before either branch, that `remote` provided matching
+        // credentials, or is the plugin peer (active_plugins) of a service that
+        // `user_id` enabled. See also the AppSessionStart actor.
         let verifier_lock_res = {
             let lock = self.state.read().await;
             lock.verifiers.get(user_id).map(|l| Arc::clone(l))
@@ -660,7 +777,6 @@ impl IServerBroker for ServerBroker {
             }
             None => {
                 // we create and load a new verifier
-
                 let credentials = if req.credentials().is_none() {
                     // headless do not have credentials. we fetch them from server_storage
                     self.storage.get_user_credentials(user_id)?
@@ -668,41 +784,7 @@ impl IServerBroker for ServerBroker {
                     req.credentials().clone().unwrap()
                 };
 
-                if *user_id != credentials.user_key.to_pub() {
-                    log_debug!("InvalidRequest");
-                    return Err(ServerError::InvalidRequest);
-                }
-
-                let verifier = self
-                    .new_verifier_from_credentials(user_id, credentials, local_peer_id, false)
-                    .await;
-                if verifier.is_err() {
-                    log_err!(
-                        "new_verifier failed with: {:?}",
-                        verifier.as_ref().unwrap_err()
-                    );
-                }
-                let mut verifier = verifier?;
-
-                // TODO : key.zeroize();
-
-                //load verifier from local_storage
-                let _ = verifier.load();
-                //TODO: save opened_branches in user_storage, so that when we open again the verifier, the syncing can work
-                verifier.sync().await;
-
-                let session = DetachableVerifier {
-                    detach: true,
-                    attached: Some(id),
-                    verifier,
-                };
-                let mut write_lock = self.state.write().await;
-                Arc::clone(
-                    write_lock
-                        .verifiers
-                        .entry(*user_id)
-                        .or_insert(Arc::new(RwLock::new(session))),
-                )
+                self.create_new_verifier(user_id, &credentials, true, Some(id)).await?
             }
         };
         let verifier = &verifier_lock.read().await.verifier;
@@ -835,6 +917,39 @@ impl IServerBroker for ServerBroker {
 
     async fn service_name_of_peer(&self, peer: &DirectPeerId) -> Option<String> {
         self.state.read().await.service_names.get(peer).cloned()
+    }
+
+    async fn plugin_notify(
+        &self,
+        peer: &DirectPeerId,
+        service_name: &String,
+        notification: PluginNotification,
+    ) -> Result<(), ServerError> {
+        let peer = *peer;
+        let req = PluginNotify {
+            service_name: service_name.clone(),
+            notification,
+        };
+        let pending = BROKER
+            .read()
+            .await
+            .prepare_request_to_app::<PluginNotify, EmptyAppResponse>(
+                peer.slice(),
+                req,
+                PLUGIN_REQUEST_TIMEOUT,
+            )
+            .map_err(|e| match e {
+                NgError::ConnectionNotFound => ServerError::PluginNotFound,
+                e => e.into(),
+            })?;
+        let service_name = service_name.clone();
+        spawn_and_log_error(async move {
+            if let Err(e) = pending.await {
+                log_err!("Cannot notify plugin {:?} for service {}: {:?}", peer, service_name, e);
+            }
+            Ok(())
+        });
+        Ok(())
     }
 
     /* Forward a PluginRequest message to its final recipient, setting the
@@ -1096,12 +1211,15 @@ impl IServerBroker for ServerBroker {
     fn service_plugin_list(&self) -> Result<Vec<ServicePlugin>, ProtocolError> {
         self.storage.service_plugin_list().map_err(Into::into)
     }
+
     fn service_plugin_put(&self, serv: &ServicePlugin, for_create: bool) -> Result<(), ProtocolError> {
         self.storage.service_plugin_put(serv, for_create).map_err(Into::into)
     }
+
     fn service_plugin_get(&self, name: &String, peer_id: &DirectPeerId) -> Result<ng_net::types::ServicePlugin, ProtocolError> {
         self.storage.service_plugin_get(name, peer_id).map_err(Into::into)
     }
+
     async fn service_plugin_list_for_user(&self, user_id: &UserId) -> Result<Vec<AvailableService>, ServerError> {
         let user_states = self.storage.service_plugin_list_user_states(user_id)?;
         let state = self.state.read().await;
@@ -1110,15 +1228,65 @@ impl IServerBroker for ServerBroker {
             match u {
                 Some(user_state) => AvailableService {
                     service_name, online,
-                    is_user_enabled: user_state.is_user_enabled,
+                    user_enabled: user_state.user_enabled,
                     settings_nuri: Some(user_state.content.settings_nuri),
                 },
                 None => AvailableService {
                     service_name, online,
-                    is_user_enabled: false,
+                    user_enabled: false,
                     settings_nuri: None,
                 },
             }
         }).collect())
+    }
+
+    /** Enable a service for that user, including create the settings document
+     * and notifying the plugin.
+     * TODO: Check that this service is admin-enabled */
+    async fn service_plugin_enable_for_user(
+        &self,
+        service_name: &String,
+        user_id: &UserId,
+        credentials: &Credentials,
+    ) -> Result<(), ServerError> {
+        let settings_nuri =
+            match self.storage.service_plugin_set_enabled_for_user(service_name, user_id, true) {
+                Ok(prev) => {
+                    if prev.user_enabled {
+                        return Ok(()); // Nothing to do
+                    }
+                    Some(prev.content.settings_nuri)
+                }
+                /* The interesting case: when the key and settings do not exist yet.
+                 * We will have to create a new settings document, but first the
+                 * credentials must be stored. */
+                Err(StorageError::NotFound) => None,
+                Err(e) => return Err(e.into()),
+            };
+        // 1. Store the user credentials
+        self.storage.add_credentials(user_id, credentials)?;
+        // 2. Create an empty settings document, if needed
+        let settings_nuri = match settings_nuri {
+            // Reuse the former settings
+            Some(nuri) => nuri,
+            None => {
+                // Create a new document in user's private store
+                let nuri = self
+                    .service_plugin_create_settings(service_name, user_id, credentials)
+                    .await?;
+                self.storage
+                    .service_plugin_set_user_state(service_name, user_id, &nuri)?;
+                nuri
+            }
+        };
+        // 3. Notify the plugin. If it is offline, it will catch up when reconnecting
+        let notification = PluginNotification::EnabledForUser(PluginEnabledForUser {
+            user_id: *user_id,
+            settings_nuri,
+        });
+        match self.service_plugin_notify(service_name, notification).await {
+            Err(ServerError::PluginNotFound) => Ok(()),
+            res => res,
+        }
     }
 }

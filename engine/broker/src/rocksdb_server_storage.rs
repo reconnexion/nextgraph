@@ -220,6 +220,16 @@ impl RocksDbServerStorage {
         Account::create(&user_id, is_admin, &self.accounts_storage)?;
         Ok(())
     }
+    pub(crate) fn add_credentials(
+        &self,
+        user_id: &PubKey,
+        credentials: &Credentials,
+    ) -> Result<(), ProtocolError> {
+        log_debug!("add_credentials {user_id}");
+        let acc = Account::open(&user_id, &self.accounts_storage)?;
+        acc.add_credentials(credentials)?;
+        Ok(())
+    }
     pub(crate) fn add_user_credentials(
         &self,
         user_id: &PubKey,
@@ -845,5 +855,40 @@ impl RocksDbServerStorage {
             }
         }
         Ok(user_states)
+    }
+
+    /// Returns the user state for that service, if any
+    pub(crate) fn service_plugin_get_user_state(
+        &self,
+        service_name: &String,
+        user_id: &UserId,
+    ) -> Result<Option<HydratedUserState>, StorageError> {
+        match HydratedUserState::find(&self.core_storage, service_name, user_id) {
+            Ok(user_state) => Ok(Some(user_state)),
+            Err(StorageError::NotFound) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub(crate) fn service_plugin_set_user_state(
+        &self,
+        service_name: &String,
+        user_id: &UserId,
+        settings_nuri: &String,
+    ) -> Result<(), StorageError> {
+        let _user_state =
+            HydratedUserState::create(&self.core_storage, service_name, user_id, settings_nuri)?;
+        Ok(())
+    }
+
+    /** Set the user-enabled flag, as long as the user-state already exists.
+     * Returns the previous user state. */
+    pub(crate) fn service_plugin_set_enabled_for_user(
+        &self,
+        service_name: &String,
+        user_id: &UserId,
+        user_enabled: bool,
+    ) -> Result<HydratedUserState, StorageError> {
+        HydratedUserState::set_user_enabled(&self.core_storage, service_name, user_id, user_enabled)
     }
 }

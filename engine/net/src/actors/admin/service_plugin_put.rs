@@ -8,26 +8,19 @@
  * notice may not be copied, modified, or distributed except
  * according to those terms.
 */
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use async_std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
-use ng_repo::errors::{ProtocolError, NgError};
+use ng_repo::errors::{ProtocolError, ServerError};
 use ng_repo::log::*;
 
 use super::super::StartProtocol;
 use crate::broker::BROKER;
 use crate::connection::NoiseFSM;
 use crate::types::*;
-use crate::utils::spawn_and_log_error;
 use crate::{actor::*, types::ProtocolMessage};
-
-/// Pending notification with an empty response to follow the protocol
-type PendingNotify =
-    Pin<Box<dyn Future<Output = Result<SoS<EmptyAppResponse>, NgError>> + Send>>;
 
 /// Request update (of the status only) of an existing ServicePlugin
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -90,52 +83,43 @@ impl EActor for Actor<'_, RequestServicePluginSetStatus, AdminResponse> {
     ) -> Result<(), ProtocolError> {
         let req = RequestServicePluginSetStatus::try_from(msg)?;
         let serv = req.service();
-        let (response, notification) = {
+        let (response, updated, sb) = {
             let broker = BROKER.read().await;
             let sb = broker.get_server_broker()?;
-            let sb = sb.read().await;
-            let res = sb.service_plugin_put(serv, false);
-            /* Storage is updated first, so that a plugin connecting after the
-             * is_connected check registers with the new status. */
-            #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-            let mut notification: Option<PendingNotify> = None;
-            if res.is_ok() {
-                let peer_key = serv.peer_id.slice();
-                let connected = broker.is_connected(peer_key);
-                if serv.status != PluginStatus::Enabled {
-                    sb.app_plugin_deactivate(&serv.peer_id, &serv.service_name).await;
-                } else if connected {
-                    sb.app_plugin_activate(&serv.peer_id, &serv.service_name).await;
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                if connected {
-                    let req = PluginNotify {
-                        service_name: serv.service_name.clone(),
-                        notification: PluginNotification::StatusChange(serv.status.clone()),
-                    };
-                    // prepared while we hold the lock but not run. See `notification.await` below
-                    match broker.prepare_request_to_app::<PluginNotify, EmptyAppResponse>(
-                        peer_key, req, PLUGIN_REQUEST_TIMEOUT)
-                    {
-                        Ok(fut) => notification = Some(Box::pin(fut)),
-                        Err(NgError::ConnectionNotFound) => (),
-                        Err(e) => log_err!("Cannot notify plugin {:?} for service {}: {:?}",
-                                           serv.peer_id, serv.service_name, e),
+            let res = {
+                let sb = sb.read().await;
+                let res = sb.service_plugin_put(serv, false);
+                /* Storage is updated first, so that a plugin connecting after the
+                 * is_connected check registers with the new status. */
+                if res.is_ok() {
+                    if serv.status != PluginStatus::Enabled {
+                        sb.app_plugin_deactivate(&serv.peer_id, &serv.service_name).await;
+                    } else if broker.is_connected(serv.peer_id.slice()) {
+                        sb.app_plugin_activate(&serv.peer_id, &serv.service_name).await;
                     }
                 }
-            }
+                res
+            };
+            let updated = res.is_ok();
             let response: AdminResponseV0 = res.into();
-            (response, notification)
+            (response, updated, sb)
         };
         fsm.lock().await.send(response.into()).await?;
-        if let Some(notification) = notification {
-            let (peer_id, name) = (serv.peer_id, serv.service_name.clone());
-            spawn_and_log_error(async move {
-                if let Err(e) = notification.await {
-                    log_err!("Cannot notify plugin {:?} for service {}: {:?}", peer_id, name, e);
-                }
-                Ok(())
-            });
+        // BROKER must not be locked anymore, as plugin_notify locks it:
+        if updated {
+            let notification = PluginNotification::StatusChange(serv.status.clone());
+            match sb
+                .read()
+                .await
+                .plugin_notify(&serv.peer_id, &serv.service_name, notification)
+                .await
+            {
+                Ok(()) | Err(ServerError::PluginNotFound) => (),
+                Err(e) => log_err!(
+                    "Cannot notify plugin {:?} for service {}: {:?}",
+                    serv.peer_id, serv.service_name, e
+                ),
+            }
         }
         Ok(())
     }
