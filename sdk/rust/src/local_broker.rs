@@ -2048,6 +2048,7 @@ pub async fn wallet_export_get_textcode(session_id: u64) -> Result<String, NgErr
                         encrypt_in_place(&mut wallet_ser, *secret_key.slice(), [0; 12]);
                         let exported_wallet =
                             ExportedWallet(serde_bytes::ByteBuf::from(wallet_ser));
+                        // TODO: use session_client_request, so BROKER is not locked while waiting.
                         match session
                             .verifier
                             .client_request::<WalletPutExport, ()>(WalletPutExport::V0(
@@ -2143,6 +2144,7 @@ pub async fn wallet_export_rendezvous(session_id: u64, code: String) -> Result<(
                                 // TODO: send the WalletPutExport client request to the broker received from QRcode. for now it is cheer luck that all clients are connected to nextgraph.eu.
                                 // if the user doesn't have an account with nextgraph.eu, their broker should relay the request (core protocol ?)
 
+                                // TODO: use session_client_request, so BROKER is not locked while waiting.
                                 match session
                                     .verifier
                                     .client_request::<WalletPutExport, ()>(WalletPutExport::V0(
@@ -3138,6 +3140,28 @@ pub async fn plugin_register(
     Ok(status)
 }
 
+/// Sends `req` to the broker the session's verifier is connected to, and waits for a
+/// single response. LOCAL_BROKER is not kept locked while waiting.
+async fn session_client_request<
+    A: Into<ProtocolMessage> + std::fmt::Debug + Sync + Send + 'static,
+    B: TryFrom<ProtocolMessage, Error = ProtocolError> + std::fmt::Debug + Sync + Send + 'static,
+>(
+    session_id: u64,
+    req: A,
+) -> Result<B, NgError> {
+    let broker = get_broker()?.read().await;
+    let response = broker
+        .get_session(session_id)?
+        .verifier
+        .prepare_client_request::<A, B>(req)
+        .await?;
+    drop(broker);
+    match response.await? {
+        SoS::Single(res) => Ok(res),
+        SoS::Stream(_) => Err(NgError::InvalidResponse),
+    }
+}
+
 /// Sends a request to the plugin `service_name` through the remote broker, and returns
 /// its response. Payloads are JSON-encoded.
 pub async fn plugin_request(
@@ -3157,42 +3181,22 @@ pub async fn plugin_request(
         drop(broker);   // Free the lock on LOCAL_BROKER
         response.await?
     } else {
-        let (real_session_id, is_remote) = broker.get_real_session_id_for_mut(session_id)?;
-        if is_remote {
-            return Err(NgError::NotImplemented);
-        }
-        let session = broker.opened_sessions_list[real_session_id]
-            .as_ref()
-            .ok_or(NgError::SessionNotFound)?;
-        let response = session
-            .verifier
-            .prepare_client_request::<_, PluginResponse>(ProtocolMessage::from_client_request_v0(
+        // session_client_request relocks; safe since config never changes after init.
+        drop(broker);
+        session_client_request(
+            session_id,
+            ProtocolMessage::from_client_request_v0(
                 ClientRequestContentV0::PluginRequest(request),
                 OverlayId::nil(),
-            ))
-            .await?;
-        drop(broker);   // Free the lock on LOCAL_BROKER
-        match response.await? {
-            SoS::Single(res) => res,
-            SoS::Stream(_) => return Err(NgError::InvalidResponse),
-        }
+            ),
+        )
+        .await?
     };
     Ok(response.response_payload)
 }
 
-
 pub async fn service_plugin_list(session_id: u64) -> Result<Vec<AvailableService>, NgError> {
-    let broker = get_broker()?.read().await;
-    let session = broker.get_session(session_id)?;
-    let response = session
-        .verifier
-        .prepare_client_request::<_, Vec<AvailableService>>(ServiceListRequest {})
-        .await?;
-    drop(broker);   // Free the lock on LOCAL_BROKER
-    match response.await? {
-        SoS::Stream(_) => Err(NgError::InvalidResponse),
-        SoS::Single(l) => Ok(l),
-    }
+    session_client_request(session_id, ServiceListRequest {}).await
 }
 
 /// retrieves the ID of one of the 3 stores of a the personal Site (3P: public, protected, or private)
