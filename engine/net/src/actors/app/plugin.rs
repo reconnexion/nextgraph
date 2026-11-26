@@ -16,17 +16,17 @@
  * credentials itself.
  *
  * Normal web applications, with a local broker connected to the broker in client mode, can talk to
- * these plugins using a very lax protocol: `call_plugin` will take a named plugin name and a
+ * these plugins using a very lax protocol: `plugin_call` will take a named plugin name and a
  * string value (likely in JSON) and the broker will then forward that value to the plugin
  * registered under that name (if any), alongside the (authenticated) identity of the caller (in
  * this case: the nextgraph user public key). The broker will then wait for the plugin to answer,
  * and forward that answer (also carrying a string value) back to the caller.
  *
- * Plugins can also call other plugins with `call_plugin`, this time as an AppMessage. The request
+ * Plugins can also call other plugins with `plugin_call`, this time as an AppMessage. The request
  * will also be forwarded by the broker to the final recipient, but this time the caller will be
  * just the originator's plugin name.
  *
- * See the two implementations of `call_plugin` in sdk/lib-wasm/src/lib.rs.
+ * See the two implementations of `plugin_call` in sdk/lib-wasm/src/lib.rs.
  *
  * Plugin messages:
  *

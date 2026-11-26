@@ -2338,7 +2338,7 @@ pub async fn plugin_register(
                     // Don't block other requests:
                     let callback = callback.clone();
                     spawn_and_log_error(async move {
-                        let _ = reply.send(call_plugin_callback(&callback, request).await);
+                        let _ = reply.send(plugin_call_back(&callback, request).await);
                         Ok(())
                     });
                 }
@@ -2369,7 +2369,7 @@ fn call_notify_callback(callback: &js_sys::Function, notify: PluginNotify) {
 }
 
 #[cfg(wasmpack_target = "nodejs")]
-async fn call_plugin_callback(
+async fn plugin_call_back(
     callback: &js_sys::Function,
     request: PluginReq,
 ) -> Result<PluginResp, ServerError> {
@@ -2381,12 +2381,12 @@ async fn call_plugin_callback(
     let returned = callback
         .call3(&JsValue::null(), &caller, &request.service_name.into(), &payload)
         .map_err(|e| {
-            log_err!("call_plugin_callback: Callback failed with {:?}", e);
+            log_err!("plugin_call_back: Callback failed with {:?}", e);
             ServerError::PluginError
         })?;
     let response = match returned.dyn_into::<js_sys::Promise>() {
         Ok(promise) => JsFuture::from(promise).await.map_err(|e| {
-            log_err!("call_plugin_callback: Promise failed with {:?}", e);
+            log_err!("plugin_call_back: Promise failed with {:?}", e);
             ServerError::PluginError
         })?,
         Err(value) => value,
@@ -2398,7 +2398,7 @@ async fn call_plugin_callback(
         response
     };
     let response_payload = js_sys::JSON::stringify(&response).map_err(|e| {
-        log_err!("call_plugin_callback: Cannot JSON-stringify response: {:?}", e);
+        log_err!("plugin_call_back: Cannot JSON-stringify response: {:?}", e);
         ServerError::PluginError
     })?;
     Ok(PluginResp {
@@ -2408,29 +2408,29 @@ async fn call_plugin_callback(
 
 /// Sends `request` (as JSON) to the plugin `service_name` and returns its response.
 #[wasm_bindgen]
-pub async fn call_plugin(
+pub async fn plugin_call(
     session_id: JsValue, // Ignored in headless mode
     service_name: String,
     request: JsValue,
 ) -> Result<JsValue, String> {
     let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id)
-        .map_err(|_| "call_plugin: Deserialization error of session_id".to_string())?;
+        .map_err(|_| "plugin_call: Deserialization error of session_id".to_string())?;
     let request_payload: String = js_sys::JSON::stringify(&request)
-        .map_err(|_| "call_plugin: Cannot JSON-stringify the request".to_string())?
+        .map_err(|_| "plugin_call: Cannot JSON-stringify the request".to_string())?
         .into();
     let response_payload =
         nextgraph::local_broker::plugin_request(session_id, service_name, request_payload)
             .await
             .map_err(|e: NgError| e.to_string())?;
     js_sys::JSON::parse(&response_payload)
-        .map_err(|_| "call_plugin: Cannot JSON-parse the plugin response".to_string())
+        .map_err(|_| "plugin_call: Cannot JSON-parse the plugin response".to_string())
 }
 
 /// Ask for the list of services that are available for the calling user
 #[wasm_bindgen]
-pub async fn list_services(session_id: JsValue) -> Result<JsValue, String> {
+pub async fn service_list(session_id: JsValue) -> Result<JsValue, String> {
     let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id)
-        .map_err(|_| "list_services: Deserialization error of session_id".to_string())?;
+        .map_err(|_| "service_list: Deserialization error of session_id".to_string())?;
     let servs: Vec<ng_net::types::AvailableService> =
         nextgraph::local_broker::service_plugin_list(session_id)
             .await

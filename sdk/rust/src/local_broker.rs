@@ -2140,7 +2140,7 @@ pub async fn wallet_read_file(file: Vec<u8>) -> Result<Wallet, NgError> {
     }
 }
 
-/// Retrieves the the Wallet by its name, to be used for opening it
+/// Retrieves the Wallet by its name, to be used for opening it
 pub async fn wallet_get(wallet_name: &String) -> Result<Wallet, NgError> {
     let broker = get_broker()?.read().await;
     // check that the wallet exists
