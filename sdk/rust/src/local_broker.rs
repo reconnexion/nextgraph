@@ -3199,6 +3199,17 @@ pub async fn service_plugin_list(session_id: u64) -> Result<Vec<AvailableService
     session_client_request(session_id, ServiceListReq {}).await
 }
 
+pub async fn service_plugin_set_user_enabled(
+    session_id: u64,
+    service_name: &String,
+    user_enabled: bool,
+) -> Result<(), NgError> {
+    let credentials =
+        if user_enabled {
+            ...TODO...
+        } else { None };
+    let req = ServiceSetUserEnabledReq { service_name, credentials };
+    session_client_request(session_id, req).await
 }
 
 /// retrieves the ID of one of the 3 stores of a the personal Site (3P: public, protected, or private)

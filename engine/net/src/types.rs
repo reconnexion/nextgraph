@@ -2888,6 +2888,12 @@ pub struct PluginResp {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServiceListReq {}
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServiceSetUserEnabledReq {
+    pub service_name: String,
+    pub credentials: Option<Credentials>, // Set for enabling, None for disabling
+}
+
 //
 // ADMIN PROTOCOL
 //
@@ -4171,6 +4177,7 @@ pub enum ClientRequestContentV0 {
 
     PluginReq(PluginReq),
     ServiceListReq(ServiceListReq),
+    ServiceSetUserEnabledReq(ServiceSetUserEnabledReq),
 }
 
 impl ClientRequestContentV0 {
@@ -4190,6 +4197,7 @@ impl ClientRequestContentV0 {
             ClientRequestContentV0::WalletPutExport(_a) => {}
             ClientRequestContentV0::PluginReq(_a) => {}
             ClientRequestContentV0::ServiceListReq(_a) => {}
+            ClientRequestContentV0::ServiceSetUserEnabledReq(_a) => {}
             _ => unimplemented!(),
         }
     }
@@ -4246,6 +4254,7 @@ impl ClientRequest {
                 ClientRequestContentV0::InboxPost(r) => r.get_actor(self.id()),
                 ClientRequestContentV0::PluginReq(r) => r.get_actor(self.id()),
                 ClientRequestContentV0::ServiceListReq(r) => r.get_actor(self.id()),
+                ClientRequestContentV0::ServiceSetUserEnabledReq(r) => r.get_actor(self.id()),
                 _ => unimplemented!(),
             },
         }

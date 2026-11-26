@@ -25,3 +25,5 @@ pub mod inbox_register;
 pub mod client_event;
 
 pub mod list_services;
+
+pub mod service_set_user_enabled;

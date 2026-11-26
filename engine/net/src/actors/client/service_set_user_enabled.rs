@@ -21,17 +21,17 @@ use crate::connection::NoiseFSM;
 use crate::types::*;
 use crate::{actor::*, types::ProtocolMessage};
 
-impl EnableServiceReq {
+impl ServiceSetUserEnabledReq {
     pub fn get_actor(&self, id: i64) -> Box<dyn EActor> {
-        Actor::<EnableServiceReq, Vec<AvailableService>>::new_responder(id)
+        Actor::<ServiceSetUserEnabledReq, ()>::new_responder(id)
     }
 }
 
-impl TryFrom<ProtocolMessage> for EnableServiceReq {
+impl TryFrom<ProtocolMessage> for ServiceSetUserEnabledReq {
     type Error = ProtocolError;
     fn try_from(msg: ProtocolMessage) -> Result<Self, Self::Error> {
         let req: ClientRequestContentV0 = msg.try_into()?;
-        if let ClientRequestContentV0::EnableServiceReq(a) = req {
+        if let ClientRequestContentV0::ServiceSetUserEnabledReq(a) = req {
             Ok(a)
         } else {
             log_debug!("INVALID {:?}", req);
@@ -40,40 +40,35 @@ impl TryFrom<ProtocolMessage> for EnableServiceReq {
     }
 }
 
-impl From<EnableServiceReq> for ProtocolMessage {
-    fn from(msg: EnableServiceReq) -> ProtocolMessage {
+impl From<ServiceSetUserEnabledReq> for ProtocolMessage {
+    fn from(msg: ServiceSetUserEnabledReq) -> ProtocolMessage {
         ProtocolMessage::from_client_request_v0(
-            ClientRequestContentV0::EnableServiceReq(msg),
+            ClientRequestContentV0::ServiceSetUserEnabledReq(msg),
             OverlayId::nil(),
         )
     }
 }
 
-impl TryFrom<ProtocolMessage> for () {
-    type Error = ProtocolError;
-    fn try_from(msg: ProtocolMessage) -> Result<Self, Self::Error> {
-        let res: ClientResponseContentV0 = msg.try_into()?;
-        if res == ClientResponseContentV0::EmptyResponse {
-            Ok(())
-        } else {
-            log_debug!("INVALID {:?}", res);
-            Err(ProtocolError::InvalidValue)
-        }
-    }
-}
-
-impl Actor<'_, EnableServiceReq, ()> {}
+impl Actor<'_, ServiceSetUserEnabledReq, ()> {}
 
 #[async_trait::async_trait]
-impl EActor for Actor<'_, EnableServiceReq, ()> {
+impl EActor for Actor<'_, ServiceSetUserEnabledReq, ()> {
     async fn respond(
         &mut self,
-        _msg: ProtocolMessage,
+        msg: ProtocolMessage,
         fsm: Arc<Mutex<NoiseFSM>>,
     ) -> Result<(), ProtocolError> {
+        let req = ServiceSetUserEnabledReq::try_from(msg)?;
         let user = fsm.lock().await.user_id()?;
         let sb = { BROKER.read().await.get_server_broker()? };
-        let res = sb.read().await.service_plugin_set_enabled(&user).await;
+        let res =
+            match req.credentials {
+                Some(credentials) =>
+                    sb.read().await.service_plugin_enable_for_user(
+                        &req.service_name, &user, &credentials).await,
+                None =>
+                    unimplemented!(),
+            };
         fsm.lock().await.send_in_reply_to(res.into(), self.id()).await?;
         Ok(())
     }
