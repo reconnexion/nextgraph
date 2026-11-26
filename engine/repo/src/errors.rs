@@ -299,6 +299,7 @@ pub enum ServerError {
     PluginNotFound,  // A PluginReq mentioned a non-existent plugin
     PluginError,  // The plugin handler failed
     PluginTimeout,  // The plugin took too long
+    CredentialsMismatch,  // Received credentials differ from the ones already stored
 }
 
 impl From<StorageError> for ServerError {

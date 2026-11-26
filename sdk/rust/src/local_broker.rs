@@ -3105,14 +3105,29 @@ pub async fn service_plugin_list(session_id: u64) -> Result<Vec<AvailableService
 
 pub async fn service_plugin_set_user_enabled(
     session_id: u64,
-    service_name: &String,
+    service_name: String,
     user_enabled: bool,
 ) -> Result<(), NgError> {
-    let credentials =
+    let creds =
         if user_enabled {
-            ...TODO...
+            let broker = get_broker()?.read().await;
+            let session = broker.get_session(session_id)?;
+            let opened_wallet = broker
+                .opened_wallets
+                .get(&session.config.wallet_name())
+                .ok_or(NgError::WalletNotFound)?;
+            let user_id = session.config.user_id();
+            let (user_key, read_cap, private_store, protected_store, public_store) =
+                opened_wallet.wallet.individual_site(&user_id).ok_or(NgError::UserNotFound)?;
+            Some(Creds {
+                user_key,
+                read_cap: read_cap.ok_or(NgError::SiteNotFoundOnBroker)?,
+                private_store: private_store.ok_or(NgError::SiteNotFoundOnBroker)?,
+                protected_store: protected_store.ok_or(NgError::SiteNotFoundOnBroker)?,
+                public_store: public_store.ok_or(NgError::SiteNotFoundOnBroker)?,
+            })
         } else { None };
-    let req = ServiceSetUserEnabledReq { service_name, credentials };
+    let req = ServiceSetUserEnabledReq { service_name, creds };
     session_client_request(session_id, req).await
 }
 

@@ -2408,27 +2408,27 @@ async fn plugin_call_back(
 
 /// Sends `request` (as JSON) to the plugin `service_name` and returns its response.
 #[wasm_bindgen]
-pub async fn plugin_call(
+pub async fn service_plugin_call(
     session_id: JsValue, // Ignored in headless mode
     service_name: String,
     request: JsValue,
 ) -> Result<JsValue, String> {
     let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id)
-        .map_err(|_| "plugin_call: Deserialization error of session_id".to_string())?;
+        .map_err(|_| "service_plugin_call: Deserialization error of session_id".to_string())?;
     let request_payload: String = js_sys::JSON::stringify(&request)
-        .map_err(|_| "plugin_call: Cannot JSON-stringify the request".to_string())?
+        .map_err(|_| "service_plugin_call: Cannot JSON-stringify the request".to_string())?
         .into();
     let response_payload =
         nextgraph::local_broker::plugin_request(session_id, service_name, request_payload)
             .await
             .map_err(|e: NgError| e.to_string())?;
     js_sys::JSON::parse(&response_payload)
-        .map_err(|_| "plugin_call: Cannot JSON-parse the plugin response".to_string())
+        .map_err(|_| "service_plugin_call: Cannot JSON-parse the plugin response".to_string())
 }
 
 /// Ask for the list of services that are available for the calling user
 #[wasm_bindgen]
-pub async fn service_list(session_id: JsValue) -> Result<JsValue, String> {
+pub async fn service_plugin_list(session_id: JsValue) -> Result<JsValue, String> {
     let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id)
         .map_err(|_| "service_list: Deserialization error of session_id".to_string())?;
     let servs: Vec<ng_net::types::AvailableService> =
@@ -2437,6 +2437,21 @@ pub async fn service_list(session_id: JsValue) -> Result<JsValue, String> {
             .map_err(|e: NgError| e.to_string())?;
     Ok(serde_wasm_bindgen::to_value(&servs).unwrap())
 }
+
+/// Enable or disable a service for the calling user
+#[wasm_bindgen]
+pub async fn service_plugin_set_user_enabled(
+    session_id: JsValue,
+    service_name: String,
+    user_enabled: bool,
+) -> Result<(), String> {
+    let session_id: u64 = serde_wasm_bindgen::from_value::<u64>(session_id)
+        .map_err(|_| "service_plugin_set_user_enabled: Deserialization error of session_id".to_string())?;
+    nextgraph::local_broker::service_plugin_set_user_enabled(session_id, service_name, user_enabled)
+        .await
+        .map_err(|e: NgError| e.to_string())
+}
+
 
 #[cfg(wasmpack_target = "nodejs")]
 #[derive(Serialize, Deserialize)]

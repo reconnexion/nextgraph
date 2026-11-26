@@ -354,6 +354,11 @@ impl ServerBroker {
         // TODO : key.zeroize();
         // load verifier from local_storage
         let _ = verifier.load();
+        // Bootstrap the verifier if needed, so it can be used right away:
+        if let Err(e) = verifier.bootstrap().await {
+            log_err!("bootstrap of verifier for {user_id} failed with: {e}");
+            return Err(e.into());
+        }
         //TODO: save opened_branches in user_storage, so that when we open again the verifier, the syncing can work
         verifier.sync().await;
         let session = DetachableVerifier { detach, attached, verifier };
@@ -385,10 +390,14 @@ impl ServerBroker {
                 // TODO: deal with it
                 return Err(ServerError::OtherError);
             }
-            None => self.create_new_verifier(user_id, credentials, true, None).await?,
+            None => {
+                log_debug!("service_plugin_create_settings: creating the verifier");
+                self.create_new_verifier(user_id, credentials, true, None).await?
+            },
         };
 
         // 2. Ask it to create the document
+        log_debug!("service_plugin_create_settings: creating the settings doc");
         let request = AppRequest::new(
             AppRequestCommandV0::Create,
             NuriV0::new_private_store_target(),
@@ -1263,16 +1272,41 @@ impl IServerBroker for ServerBroker {
                 Err(StorageError::NotFound) => None,
                 Err(e) => return Err(e.into()),
             };
-        // 1. Store the user credentials
-        self.storage.add_credentials(user_id, credentials)?;
+        /* 1. Store the user credentials. In the (rare) case where it's already
+         * stored, reuse them or we won't be able to use the existing verifier. */
+        let credentials = match self.storage.get_user_credentials(user_id) {
+            Ok(stored) => {
+                /* It's worth checking that the non random fields have the expected
+                 * values, though: */
+                if stored.user_key != credentials.user_key
+                    || stored.read_cap != credentials.read_cap
+                    || stored.private_store != credentials.private_store
+                    || stored.protected_store != credentials.protected_store
+                    || stored.public_store != credentials.public_store
+                {
+                    log_err!("service_plugin_enable_for_user: received credentials for {user_id} \
+                              differ from previously stored ones");
+                    return Err(ServerError::CredentialsMismatch);
+                }
+                stored
+            }
+            Err(ProtocolError::NotFound) => {
+                self.storage.add_credentials(user_id, credentials)?;
+                credentials.clone()
+            }
+            Err(e) => return Err(e.into()),
+        };
         // 2. Create an empty settings document, if needed
         let settings_nuri = match settings_nuri {
             // Reuse the former settings
-            Some(nuri) => nuri,
+            Some(nuri) => {
+                log_debug!("service_plugin_enable_for_user: reusing former settings ({nuri})");
+                nuri
+            },
             None => {
                 // Create a new document in user's private store
                 let nuri = self
-                    .service_plugin_create_settings(service_name, user_id, credentials)
+                    .service_plugin_create_settings(service_name, user_id, &credentials)
                     .await?;
                 self.storage
                     .service_plugin_set_user_state(service_name, user_id, &nuri)?;

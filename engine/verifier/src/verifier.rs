@@ -2010,7 +2010,7 @@ impl Verifier {
         ))
     }
 
-    async fn bootstrap(&mut self) -> Result<(), NgError> {
+    pub async fn bootstrap(&mut self) -> Result<(), NgError> {
         if let Err(e) = self.bootstrap_from_remote().await {
             log_warn!("bootstrap_from_remote failed with {}", e);
             // maybe it failed because the 3P stores are still in the outbox and haven't been sent yet.
@@ -2424,7 +2424,7 @@ impl Verifier {
         if self.need_bootstrap() {
             let broker = BROKER.read().await;
             let user = Some(self.user_id().clone());
-            self.connected_broker.is_direct_or_err()?;
+            self.connected_broker.connected_or_err()?;
 
             let private_store_id = self.config.private_store_id.to_owned().unwrap();
             let private_store = self.create_private_store_from_credentials()?;

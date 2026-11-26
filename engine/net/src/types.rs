@@ -108,6 +108,33 @@ impl Credentials {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/** Smaller version of the above, travelling from local broker to ngd the be stored
+ * there when enabling a service. */
+pub struct Creds {
+    pub user_key: PrivKey,
+    pub read_cap: ReadCap,
+    pub private_store: RepoId,
+    pub protected_store: RepoId,
+    pub public_store: RepoId,
+}
+
+/** user_master_key is ours to choose: it only encrypts the stored version in the broker.
+ * peer_priv_key will become the identity of its verifier.  Set both to some random values: */
+impl From<Creds> for Credentials {
+    fn from(creds: Creds) -> Credentials {
+        Credentials {
+            user_key: creds.user_key,
+            read_cap: creds.read_cap,
+            private_store: creds.private_store,
+            protected_store: creds.protected_store,
+            public_store: creds.public_store,
+            user_master_key: SymKey::random(),
+            peer_priv_key: PrivKey::random_ed(),
+        }
+    }
+}
+
 //
 //  Network common types
 //
@@ -2891,7 +2918,7 @@ pub struct ServiceListReq {}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServiceSetUserEnabledReq {
     pub service_name: String,
-    pub credentials: Option<Credentials>, // Set for enabling, None for disabling
+    pub creds: Option<Creds>, // Some for enabling, None for disabling
 }
 
 //

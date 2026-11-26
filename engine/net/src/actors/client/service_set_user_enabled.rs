@@ -62,10 +62,10 @@ impl EActor for Actor<'_, ServiceSetUserEnabledReq, ()> {
         let user = fsm.lock().await.user_id()?;
         let sb = { BROKER.read().await.get_server_broker()? };
         let res =
-            match req.credentials {
-                Some(credentials) =>
+            match req.creds {
+                Some(creds) =>
                     sb.read().await.service_plugin_enable_for_user(
-                        &req.service_name, &user, &credentials).await,
+                        &req.service_name, &user, &creds.into()).await,
                 None =>
                     unimplemented!(),
             };
