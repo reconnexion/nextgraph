@@ -2769,8 +2769,8 @@ pub enum AppMessageContentV0 {
     EmptyResponse,
     PluginRegister(AppPluginRegister),
     PluginRegisterResp(AppPluginRegisterResp),
-    PluginRequest(PluginRequest),   // in both directions
-    PluginResponse(PluginResponse),  // in both directions
+    PluginReq(PluginReq),   // in both directions
+    PluginResp(PluginResp),  // in both directions
     PluginNotify(PluginNotify),   // only from Broker to plugin
 }
 
@@ -2813,10 +2813,10 @@ impl AppMessage {
                 AppMessageContentV0::Response(_)
                 | AppMessageContentV0::EmptyResponse
                 | AppMessageContentV0::PluginRegisterResp(_)
-                | AppMessageContentV0::PluginResponse(_) =>
+                | AppMessageContentV0::PluginResp(_) =>
                     panic!("it is not a request"),
                 AppMessageContentV0::PluginRegister(req) => req.get_actor(*id),
-                AppMessageContentV0::PluginRequest(req) => req.get_actor(*id),
+                AppMessageContentV0::PluginReq(req) => req.get_actor(*id),
                 AppMessageContentV0::PluginNotify(req) => req.get_actor(*id),
             },
         }
@@ -2839,16 +2839,16 @@ impl From<AppMessage> for ProtocolMessage {
     }
 }
 
-/// The caller of a PluginRequest can be a normal client or another plugin:
+/// The caller of a PluginReq can be a normal client or another plugin:
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PluginCaller { User(UserId), Plugin(String) }
 
-/// The broker will wait that long for a plugin to answer a PluginRequest:
+/// The broker will wait that long for a plugin to answer a PluginReq:
 pub const PLUGIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// A PluginRequest: from who to who and an opaque payload:
+/// A PluginReq: from who to who and an opaque payload:
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PluginRequest {
+pub struct PluginReq {
     /// Recipient service name:
     pub service_name: String,
     /// The payload as a JSON string to be forwarded to the plugin handler.
@@ -2879,14 +2879,14 @@ pub enum PluginNotification {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PluginResponse {
+pub struct PluginResp {
     /// The JSON string to forward back to the original caller.
     pub response_payload: String,
 }
 
 /// Don't laugh: routing in done by type
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ServiceListRequest {}
+pub struct ServiceListReq {}
 
 //
 // ADMIN PROTOCOL
@@ -4169,8 +4169,8 @@ pub enum ClientRequestContentV0 {
     InboxRegister(InboxRegister),
     InboxPost(InboxPost),
 
-    PluginRequest(PluginRequest),
-    ServiceListRequest(ServiceListRequest),
+    PluginReq(PluginReq),
+    ServiceListReq(ServiceListReq),
 }
 
 impl ClientRequestContentV0 {
@@ -4188,8 +4188,8 @@ impl ClientRequestContentV0 {
             ClientRequestContentV0::BlocksExist(a) => a.set_overlay(overlay),
             ClientRequestContentV0::BlocksGet(a) => a.set_overlay(overlay),
             ClientRequestContentV0::WalletPutExport(_a) => {}
-            ClientRequestContentV0::PluginRequest(_a) => {}
-            ClientRequestContentV0::ServiceListRequest(_a) => {}
+            ClientRequestContentV0::PluginReq(_a) => {}
+            ClientRequestContentV0::ServiceListReq(_a) => {}
             _ => unimplemented!(),
         }
     }
@@ -4244,8 +4244,8 @@ impl ClientRequest {
                 ClientRequestContentV0::WalletPutExport(r) => r.get_actor(self.id()),
                 ClientRequestContentV0::InboxRegister(r) => r.get_actor(self.id()),
                 ClientRequestContentV0::InboxPost(r) => r.get_actor(self.id()),
-                ClientRequestContentV0::PluginRequest(r) => r.get_actor(self.id()),
-                ClientRequestContentV0::ServiceListRequest(r) => r.get_actor(self.id()),
+                ClientRequestContentV0::PluginReq(r) => r.get_actor(self.id()),
+                ClientRequestContentV0::ServiceListReq(r) => r.get_actor(self.id()),
                 _ => unimplemented!(),
             },
         }
@@ -4391,7 +4391,7 @@ pub enum ClientResponseContentV0 {
     TopicSyncRes(TopicSyncRes),
     BlocksFound(BlocksFound),
     RepoPinStatus(RepoPinStatus),
-    PluginResponse(PluginResponse),
+    PluginResp(PluginResp),
     ServiceList(Vec<AvailableService>),
 }
 

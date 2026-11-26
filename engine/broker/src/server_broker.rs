@@ -952,13 +952,13 @@ impl IServerBroker for ServerBroker {
         Ok(())
     }
 
-    /* Forward a PluginRequest message to its final recipient, setting the
+    /* Forward a PluginReq message to its final recipient, setting the
      * caller field to the passed value. */
     async fn plugin_request_forward(
         &self,
-        mut req: PluginRequest,
+        mut req: PluginReq,
         caller: PluginCaller,
-    ) -> Result<PluginResponse, ServerError> {
+    ) -> Result<PluginResp, ServerError> {
         // Only the broker can tell who the caller is:
         if req.caller.is_some() {
             return Err(ServerError::InvalidRequest);
@@ -977,7 +977,7 @@ impl IServerBroker for ServerBroker {
         let response = BROKER
             .read()
             .await
-            .prepare_request_to_app::<PluginRequest, PluginResponse>(
+            .prepare_request_to_app::<PluginReq, PluginResp>(
                 peer.slice(),
                 req,
                 PLUGIN_REQUEST_TIMEOUT,

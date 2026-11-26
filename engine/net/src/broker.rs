@@ -138,7 +138,7 @@ pub enum LocalBrokerMessage {
 #[derive(Debug)]
 pub enum PluginIncoming {
     /// A request needs a oneshot to write the answer into.
-    Request(PluginRequest, oneshot::Sender<Result<PluginResponse, ServerError>>),
+    Request(PluginReq, oneshot::Sender<Result<PluginResp, ServerError>>),
     Notify(PluginNotify),
 }
 
@@ -164,7 +164,7 @@ pub struct Broker {
     //local_broker: Option<Box<dyn ILocalBroker + Send + Sync + 'a>>,
     local_broker: Option<UnboundedSender<LocalBrokerMessage>>,
 
-    /// Function actually answering `PluginRequest` and `PluginNotify` messages.
+    /// Function actually answering `PluginReq` and `PluginNotify` messages.
     /// Only ever set on plugins (headless app clients).
     plugin_handler: Option<PluginHandler>,
 

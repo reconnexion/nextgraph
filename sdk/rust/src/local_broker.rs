@@ -3169,14 +3169,14 @@ pub async fn plugin_request(
     service_name: String,
     request_payload: String,
 ) -> Result<String, NgError> {
-    let request = PluginRequest {
+    let request = PluginReq {
         service_name,
         request_payload,
         caller: None,
     };
     let broker = get_broker()?.read().await;
     // In both cases, the local broker should not stay locked while the plugin works on it.
-    let response: PluginResponse = if let LocalBrokerConfig::Headless(_) = &broker.config {
+    let response: PluginResp = if let LocalBrokerConfig::Headless(_) = &broker.config {
         let response = broker.prepare_request_headless(request).await?;
         drop(broker);   // Free the lock on LOCAL_BROKER
         response.await?
@@ -3186,7 +3186,7 @@ pub async fn plugin_request(
         session_client_request(
             session_id,
             ProtocolMessage::from_client_request_v0(
-                ClientRequestContentV0::PluginRequest(request),
+                ClientRequestContentV0::PluginReq(request),
                 OverlayId::nil(),
             ),
         )
@@ -3196,7 +3196,9 @@ pub async fn plugin_request(
 }
 
 pub async fn service_plugin_list(session_id: u64) -> Result<Vec<AvailableService>, NgError> {
-    session_client_request(session_id, ServiceListRequest {}).await
+    session_client_request(session_id, ServiceListReq {}).await
+}
+
 }
 
 /// retrieves the ID of one of the 3 stores of a the personal Site (3P: public, protected, or private)

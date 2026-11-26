@@ -296,7 +296,7 @@ pub enum ServerError {
     InvalidTarget,
     ExportWalletTimeOut,
     NetError,
-    PluginNotFound,  // A PluginRequest mentioned a non-existent plugin
+    PluginNotFound,  // A PluginReq mentioned a non-existent plugin
     PluginError,  // The plugin handler failed
     PluginTimeout,  // The plugin took too long
 }

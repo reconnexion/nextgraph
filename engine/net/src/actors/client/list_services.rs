@@ -21,17 +21,17 @@ use crate::connection::NoiseFSM;
 use crate::types::*;
 use crate::{actor::*, types::ProtocolMessage};
 
-impl ServiceListRequest {
+impl ServiceListReq {
     pub fn get_actor(&self, id: i64) -> Box<dyn EActor> {
-        Actor::<ServiceListRequest, Vec<AvailableService>>::new_responder(id)
+        Actor::<ServiceListReq, Vec<AvailableService>>::new_responder(id)
     }
 }
 
-impl TryFrom<ProtocolMessage> for ServiceListRequest {
+impl TryFrom<ProtocolMessage> for ServiceListReq {
     type Error = ProtocolError;
     fn try_from(msg: ProtocolMessage) -> Result<Self, Self::Error> {
         let req: ClientRequestContentV0 = msg.try_into()?;
-        if let ClientRequestContentV0::ServiceListRequest(a) = req {
+        if let ClientRequestContentV0::ServiceListReq(a) = req {
             Ok(a)
         } else {
             log_debug!("INVALID {:?}", req);
@@ -40,10 +40,10 @@ impl TryFrom<ProtocolMessage> for ServiceListRequest {
     }
 }
 
-impl From<ServiceListRequest> for ProtocolMessage {
-    fn from(msg: ServiceListRequest) -> ProtocolMessage {
+impl From<ServiceListReq> for ProtocolMessage {
+    fn from(msg: ServiceListReq) -> ProtocolMessage {
         ProtocolMessage::from_client_request_v0(
-            ClientRequestContentV0::ServiceListRequest(msg),
+            ClientRequestContentV0::ServiceListReq(msg),
             OverlayId::nil(),
         )
     }
@@ -68,10 +68,10 @@ impl From<Vec<AvailableService>> for ProtocolMessage {
     }
 }
 
-impl Actor<'_, ServiceListRequest, Vec<AvailableService>> {}
+impl Actor<'_, ServiceListReq, Vec<AvailableService>> {}
 
 #[async_trait::async_trait]
-impl EActor for Actor<'_, ServiceListRequest, Vec<AvailableService>> {
+impl EActor for Actor<'_, ServiceListReq, Vec<AvailableService>> {
     async fn respond(
         &mut self,
         _msg: ProtocolMessage,

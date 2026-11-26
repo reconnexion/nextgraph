@@ -34,11 +34,11 @@
  *   know that this client can respond to requests; To prevent a plugin to hijack messages of
  *   another, the association between plugin names and clients' peer-ids is recorded and vetted by
  *   the broker's admin;
- * - PluginRequest, as either a ClientMessage or an AppMessage, from the originator to the broker
+ * - PluginReq, as either a ClientMessage or an AppMessage, from the originator to the broker
  *   or forwarded from the broker to the final recipient;
  *   A single actor (this one) manages those two cases and adapt its behavior depending on
  *   circumstances, to avoid code duplication;
- * - PluginResponse, as either a ClientMessage or an AppMessage, carrying the response from the
+ * - PluginResp, as either a ClientMessage or an AppMessage, carrying the response from the
  *   headless plugin in the other direction;
  * - PluginNotify, as an AppMessage, from the broker to a plugin (answered with an EmptyResponse
  *   once handed to the local handler).
@@ -150,86 +150,86 @@ impl EActor for Actor<'_, AppPluginRegister, AppPluginRegisterResp> {
     }
 }
 
-/// PluginRequest, ether from a client (as a ClientRequest) or an (headless) app
+/// PluginReq, ether from a client (as a ClientRequest) or an (headless) app
 /// (as an AppRequest). The same actor (in actors/app/) is used in both cases.
 /// Contrary to every other non-stream requests, this one can also originates from
 /// the broker, when forwarding to the final recipient (a headless plugin); And
-/// same is true of the PluginResponse too.
+/// same is true of the PluginResp too.
 
-impl PluginRequest {
+impl PluginReq {
     pub fn get_actor(&self, id: i64) -> Box<dyn EActor> {
-        Actor::<PluginRequest, PluginResponse>::new_responder(id)
+        Actor::<PluginReq, PluginResp>::new_responder(id)
     }
 }
 
-impl TryFrom<ProtocolMessage> for PluginRequest {
+impl TryFrom<ProtocolMessage> for PluginReq {
     type Error = ProtocolError;
     fn try_from(msg: ProtocolMessage) -> Result<Self, Self::Error> {
         if let ProtocolMessage::ClientMessage(_) = msg {
-            if let ClientRequestContentV0::PluginRequest(req) = msg.try_into()? {
+            if let ClientRequestContentV0::PluginReq(req) = msg.try_into()? {
                 return Ok(req);
             }
-        } else if let AppMessageContentV0::PluginRequest(req) = msg.try_into()? {
+        } else if let AppMessageContentV0::PluginReq(req) = msg.try_into()? {
             return Ok(req);
         }
-        log_debug!("INVALID PluginRequest");
+        log_debug!("INVALID PluginReq");
         Err(ProtocolError::InvalidValue)
     }
 }
 
-impl From<PluginRequest> for ProtocolMessage {
-    fn from(req: PluginRequest) -> ProtocolMessage {
-        AppMessageContentV0::PluginRequest(req).into()
+impl From<PluginReq> for ProtocolMessage {
+    fn from(req: PluginReq) -> ProtocolMessage {
+        AppMessageContentV0::PluginReq(req).into()
     }
 }
 
-impl TryFrom<ProtocolMessage> for PluginResponse {
+impl TryFrom<ProtocolMessage> for PluginResp {
     type Error = ProtocolError;
     fn try_from(msg: ProtocolMessage) -> Result<Self, Self::Error> {
         if let ProtocolMessage::ClientMessage(_) = msg {
-            if let ClientResponseContentV0::PluginResponse(res) = msg.try_into()? {
+            if let ClientResponseContentV0::PluginResp(res) = msg.try_into()? {
                 return Ok(res);
             }
-        } else if let AppMessageContentV0::PluginResponse(res) = msg.try_into()? {
+        } else if let AppMessageContentV0::PluginResp(res) = msg.try_into()? {
             return Ok(res);
         }
-        log_debug!("INVALID PluginResponse");
+        log_debug!("INVALID PluginResp");
         Err(ProtocolError::InvalidValue)
     }
 }
 
-impl From<PluginResponse> for ProtocolMessage {
-    fn from(res: PluginResponse) -> ProtocolMessage {
+impl From<PluginResp> for ProtocolMessage {
+    fn from(res: PluginResp) -> ProtocolMessage {
         let msg: AppMessage = res.into();
         msg.into()
     }
 }
 
-impl From<PluginResponse> for AppMessage {
-    fn from(res: PluginResponse) -> AppMessage {
+impl From<PluginResp> for AppMessage {
+    fn from(res: PluginResp) -> AppMessage {
         AppMessage::V0(AppMessageV0 {
             id: 0,
             result: 0,
-            content: AppMessageContentV0::PluginResponse(res),
+            content: AppMessageContentV0::PluginResp(res),
         })
     }
 }
 
-impl From<PluginResponse> for ClientResponse {
-    fn from(res: PluginResponse) -> ClientResponse {
+impl From<PluginResp> for ClientResponse {
+    fn from(res: PluginResp) -> ClientResponse {
         ClientResponse::V0(ClientResponseV0 {
             id: 0,
             result: 0,
-            content: ClientResponseContentV0::PluginResponse(res),
+            content: ClientResponseContentV0::PluginResp(res),
         })
     }
 }
 
 /// Broker side of a client connection: forwards the request to the named plugin.
 async fn serve_client_plugin_request(
-    req: PluginRequest,
+    req: PluginReq,
     fsm: &Mutex<NoiseFSM>,
-) -> Result<PluginResponse, ServerError> {
+) -> Result<PluginResp, ServerError> {
     let user = {
         let lock = fsm.lock().await;
         if !lock.dir().is_server() {
@@ -246,9 +246,9 @@ async fn serve_client_plugin_request(
 /// plugin or to the JS handler.
 /// Both can take a while, don't hold any lock!
 async fn serve_app_plugin_request(
-    req: PluginRequest,
+    req: PluginReq,
     fsm: &Mutex<NoiseFSM>,
-) -> Result<PluginResponse, ServerError> {
+) -> Result<PluginResp, ServerError> {
     let (is_server, remote) = {
         let lock = fsm.lock().await;
         (lock.dir().is_server(), *lock.remote_peer())
@@ -280,17 +280,17 @@ async fn serve_app_plugin_request(
     }
 }
 
-impl Actor<'_, PluginRequest, PluginResponse> {}
+impl Actor<'_, PluginReq, PluginResp> {}
 
 #[async_trait::async_trait]
-impl EActor for Actor<'_, PluginRequest, PluginResponse> {
+impl EActor for Actor<'_, PluginReq, PluginResp> {
     async fn respond(
         &mut self,
         msg: ProtocolMessage,
         fsm: Arc<Mutex<NoiseFSM>>,
     ) -> Result<(), ProtocolError> {
         let from_client = matches!(msg, ProtocolMessage::ClientMessage(_));
-        let req = PluginRequest::try_from(msg)?;
+        let req = PluginReq::try_from(msg)?;
         let id = self.id();
         /* Whether the request is forwarded to the plugin or to some JS handler,
          * do not wait for the answer. Return now, send_in_reply_to in another

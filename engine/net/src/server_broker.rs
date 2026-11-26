@@ -134,9 +134,9 @@ pub trait IServerBroker: Send + Sync {
     /// Forwards `req` to the named plugin, on behalf of `caller`, and returns its response.
     async fn plugin_request_forward(
         &self,
-        req: PluginRequest,
+        req: PluginReq,
         caller: PluginCaller,
-    ) -> Result<PluginResponse, ServerError>;
+    ) -> Result<PluginResp, ServerError>;
 
     fn next_seq_for_peer(&self, peer: &PeerId, seq: u64) -> Result<(), ServerError>;
 

@@ -51,7 +51,7 @@ use ng_net::app_protocol::*;
 use ng_net::broker::*;
 use ng_net::types::{
     BindAddress, BootstrapContentV0, ClientInfo, ClientInfoV0, ClientType, CreateAccountBSP,
-    InboxPost, PluginRequest, PluginResponse, PluginNotify, PluginNotification, IP, ServicePlugin, PluginStatus,
+    InboxPost, PluginReq, PluginResp, PluginNotify, PluginNotification, IP, ServicePlugin, PluginStatus,
 };
 use ng_net::utils::{
     decode_invitation_string, parse_ip_and_port_for, retrieve_local_bootstrap, retrieve_local_url,
@@ -2371,8 +2371,8 @@ fn call_notify_callback(callback: &js_sys::Function, notify: PluginNotify) {
 #[cfg(wasmpack_target = "nodejs")]
 async fn call_plugin_callback(
     callback: &js_sys::Function,
-    request: PluginRequest,
-) -> Result<PluginResponse, ServerError> {
+    request: PluginReq,
+) -> Result<PluginResp, ServerError> {
     let payload = js_sys::JSON::parse(&request.request_payload)
         .map_err(|_| ServerError::InvalidRequest)?;
     let caller = request.caller.ok_or(ServerError::InvalidRequest)?;
@@ -2401,7 +2401,7 @@ async fn call_plugin_callback(
         log_err!("call_plugin_callback: Cannot JSON-stringify response: {:?}", e);
         ServerError::PluginError
     })?;
-    Ok(PluginResponse {
+    Ok(PluginResp {
         response_payload: response_payload.into(),
     })
 }
