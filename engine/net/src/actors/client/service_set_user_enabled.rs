@@ -59,15 +59,16 @@ impl EActor for Actor<'_, ServiceSetUserEnabledReq, ()> {
         fsm: Arc<Mutex<NoiseFSM>>,
     ) -> Result<(), ProtocolError> {
         let req = ServiceSetUserEnabledReq::try_from(msg)?;
-        let user = fsm.lock().await.user_id()?;
+        let user_id = fsm.lock().await.user_id()?;
         let sb = { BROKER.read().await.get_server_broker()? };
         let res =
             match req.creds {
                 Some(creds) =>
                     sb.read().await.service_plugin_enable_for_user(
-                        &req.service_name, &user, &creds.into()).await,
+                        &req.service_name, &user_id, &creds.into()).await,
                 None =>
-                    unimplemented!(),
+                    sb.read().await.service_plugin_disable_for_user(
+                        &req.service_name, &user_id).await
             };
         fsm.lock().await.send_in_reply_to(res.into(), self.id()).await?;
         Ok(())

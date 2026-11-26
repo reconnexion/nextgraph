@@ -2892,7 +2892,7 @@ pub struct PluginNotify {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PluginEnabledForUser {
+pub struct PluginUser {
     pub user_id: UserId,
     pub settings_nuri: String,
 }
@@ -2902,7 +2902,9 @@ pub enum PluginNotification {
     /// The admin changed the status of this plugin:
     StatusChange(PluginStatus),
     /// A user (re-)enabled the service:
-    EnabledForUser(PluginEnabledForUser),
+    EnabledForUser(PluginUser),
+    /// A user disabled the service:
+    DisabledForUser(PluginUser),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

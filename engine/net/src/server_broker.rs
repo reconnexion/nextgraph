@@ -221,4 +221,9 @@ pub trait IServerBroker: Send + Sync {
         user_id: &UserId,
         credentials: &Credentials,
     ) -> Result<(), ServerError>;
+    async fn service_plugin_disable_for_user(
+        &self,
+        service_name: &String,
+        user_id: &UserId,
+    ) -> Result<(), ServerError>;
 }

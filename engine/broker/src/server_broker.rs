@@ -264,6 +264,13 @@ impl ServerBroker {
         Ok(())
     }
 
+    fn verifier_files_path(&self, user_id: &UserId) -> PathBuf {
+        let mut path = self.get_path_users();
+        let user_hash: Digest = user_id.into();
+        path.push(user_hash.to_string());
+        path
+    }
+
     async fn new_verifier_from_credentials(
         &self,
         user_id: &UserId,
@@ -272,9 +279,7 @@ impl ServerBroker {
         partial_credentials: bool,
     ) -> Result<Verifier, NgError> {
         let block_storage = self.get_block_storage();
-        let mut path = self.get_path_users();
-        let user_hash: Digest = user_id.into();
-        path.push(user_hash.to_string());
+        let path = self.verifier_files_path(user_id);
         std::fs::create_dir_all(path.clone()).unwrap();
         let peer_id_dh = credentials.peer_priv_key.to_pub().to_dh_from_ed();
         let mut verifier = Verifier::new(
@@ -1314,9 +1319,51 @@ impl IServerBroker for ServerBroker {
             }
         };
         // 3. Notify the plugin. If it is offline, it will catch up when reconnecting
-        let notification = PluginNotification::EnabledForUser(PluginEnabledForUser {
+        let notification = PluginNotification::EnabledForUser(PluginUser {
             user_id: *user_id,
             settings_nuri,
+        });
+        match self.service_plugin_notify(service_name, notification).await {
+            Err(ServerError::PluginNotFound) => Ok(()),
+            res => res,
+        }
+    }
+
+    /** Disable that service for that user.
+     * Ie. mark it disabled, delete the verifier, the credentials, and everything
+     * that's stored, and finally notify the plugin. */
+    async fn service_plugin_disable_for_user(
+        &self,
+        service_name: &String,
+        user_id: &UserId,
+    ) -> Result<(), ServerError> {
+        // 1. Set the user-state as user-disabled
+        let prev =
+            self.storage.service_plugin_set_enabled_for_user(service_name, user_id, false)?;
+        if !prev.user_enabled {
+            return Ok(()); // Nothing to do
+        }
+        // 2. Delete the verifier, if running. The state lock must be released before notifying.
+        let verifier = self.state.write().await.verifiers.remove(user_id);
+        if let Some(verifier) = verifier {
+            verifier.read().await.verifier.close().await;
+        }
+        // 3. Remove the credentials
+        self.storage.remove_credentials(&user_id)?;
+        // 4. Delete the verifier's files
+        let path = self.verifier_files_path(user_id);
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => (),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => {
+                log_err!("Cannot delete {}: {e}", path.display());
+                return Err(ServerError::StorageError);
+            }
+        }
+        // 5. Notify the plugin
+        let notification = PluginNotification::DisabledForUser(PluginUser {
+            user_id: *user_id,
+            settings_nuri: prev.content.settings_nuri,
         });
         match self.service_plugin_notify(service_name, notification).await {
             Err(ServerError::PluginNotFound) => Ok(()),

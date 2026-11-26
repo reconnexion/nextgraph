@@ -230,6 +230,12 @@ impl RocksDbServerStorage {
         acc.add_credentials(credentials)?;
         Ok(())
     }
+    pub(crate) fn remove_credentials(&self, user_id: &PubKey) -> Result<(), ProtocolError> {
+        log_debug!("del_credentials {user_id}");
+        let acc = Account::open(&user_id, &self.accounts_storage)?;
+        acc.remove_credentials()?;
+        Ok(())
+    }
     pub(crate) fn add_user_credentials(
         &self,
         user_id: &PubKey,
